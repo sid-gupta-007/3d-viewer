@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --pretty"
+    "typecheck": "tsc -b --pretty",
+    "test": "node --test tests/phase2.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
