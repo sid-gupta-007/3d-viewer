@@ -2,6 +2,9 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import * as THREE from 'three/webgpu'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { selectMeshesInRect } from './features/selection/viewportSelection'
 import { cycleMeshHit, pickAllVisibleMeshes } from './features/selection/pickMesh'
@@ -315,7 +318,22 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
           const match = [...resourcesByName].find(([name]) => normalized === name || normalized.endsWith(`/${name}`))
           return match?.[1] ?? url
         })
-        const gltf = await new GLTFLoader(manager).loadAsync(fileUrl)
+        const loader = new GLTFLoader(manager)
+        const dracoLoader = new DRACOLoader(manager)
+        dracoLoader.setDecoderPath('./draco/')
+        loader.setDRACOLoader(dracoLoader)
+        const ktx2Loader = new KTX2Loader(manager)
+        ktx2Loader.setTranscoderPath('./basis/')
+        try {
+          ktx2Loader.detectSupport(current.renderer)
+        } catch {
+          // Ignore KTX2 GPU capability detection fallback if renderer is still warming up
+        }
+        loader.setKTX2Loader(ktx2Loader)
+        loader.setMeshoptDecoder(MeshoptDecoder)
+        const gltf = await loader.loadAsync(fileUrl)
+        dracoLoader.dispose()
+        ktx2Loader.dispose()
         const root = gltf.scene
         let key = assetKey ?? `model-${file.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`
         if (append) {
