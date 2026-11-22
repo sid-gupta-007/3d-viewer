@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty",
-    "test": "node --test tests/phase2.test.mjs"
+    "test": "node --test tests/phase2.test.mjs tests/phase3-foundation.test.mjs tests/split-mesh.test.mjs tests/animation-env.test.mjs tests/glb-selection-and-volume.test.mjs tests/export-consistency.test.mjs tests/history.test.mjs tests/e2e-acceptance.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

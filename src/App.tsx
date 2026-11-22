@@ -1,13 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Activity, Box, ChevronDown, ChevronRight, Code2, Cuboid, ExternalLink,
+  Box, ChevronDown, ChevronRight, Code2, Cuboid, ExternalLink,
   Download, Eye, EyeOff, FilePlus2, FolderOpen, Grid2X2, Layers3,
   Maximize2, Move3D, MousePointer2, Pause, Play,
-  Plus, Rotate3D, Search, Sparkles, SquareDashed, Triangle, Upload, Video, X,
+  Plus, Redo2, Rotate3D, RotateCcw, Scan, Search, Sparkles, SquareDashed, Triangle, Undo2, Upload, Video, X,
 } from 'lucide-react'
 import type { ObjectStats, ObjectTransform, SceneNode, ViewportApi } from './SceneViewport'
 import { selectMany as mergeSelection, selectOne as toggleSelection } from './features/selection/selectionState'
 import { dissolveProgress, isSceneEffect, isSurfaceEffect, type SceneEffect, type SurfaceEffect } from './features/effects/dissolve'
+import { createDefaultManifest, type EnvironmentPresetId } from './domain/sceneManifest'
+import { generateR3FComponent } from './export/r3f/r3fCodegen'
+import { buildExportZipEntries, buildProjectData, generateRuntimeJs, resolveExportAssetPath } from './export/forgeExporter'
+import { matchHistoryShortcut, shouldIgnoreHistoryShortcut, useHistoryStore } from './features/history/historyStore'
 
 const SceneViewport = lazy(() => import('./SceneViewport'))
 
@@ -228,6 +232,7 @@ addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; cam
 `
 
 const createRuntimeSource = (project: unknown) => runtimeSource.replace('__FORGE_PROJECT__', JSON.stringify(project, null, 2))
+void createRuntimeSource
 
 function App() {
   const viewport = useRef<ViewportApi>(null)
@@ -241,8 +246,13 @@ function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const selectionRef = useRef({ selected: '', ids: [] as string[] })
   selectionRef.current = { selected, ids: selectedIds }
-  const [activeTool, setActiveTool] = useState<'select' | 'move' | 'rotate' | 'scale'>('select')
+  const [activeTool, setActiveTool] = useState<'select' | 'move' | 'rotate' | 'scale' | 'volume'>('select')
   const [boxSelect, setBoxSelect] = useState(false)
+  const [envPreset, setEnvPreset] = useState<EnvironmentPresetId>('studio')
+  const [xrEnabled, setXrEnabled] = useState(false)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [volumeBoxMode, setVolumeBoxModeState] = useState<'translate' | 'scale'>('translate')
+  const { canUndo, canRedo, pushState, undo, redo, clear: clearHistory } = useHistoryStore()
   const [wireframe, setWireframe] = useState(false)
   const [objectStats, setObjectStats] = useState<ObjectStats | null>(null)
   const [transform, setTransform] = useState({ position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] })
@@ -334,6 +344,67 @@ function App() {
     return () => { cancelled = true; window.cancelAnimationFrame(frame) }
   }, [])
 
+  const commitHistorySnapshot = useCallback((overrideNodes?: SceneNode[], overrideFrames?: Keyframe[]) => {
+    const snap = viewport.current?.captureSceneSnapshot?.()
+    if (!snap) return
+    pushState({
+      nodes: overrideNodes ?? snap.nodes,
+      transforms: snap.transforms,
+      visibility: snap.visibility,
+      pivots: snap.pivots,
+      frames: overrideFrames ?? frames,
+      selected: selectionRef.current.selected,
+      selectedIds: selectionRef.current.ids,
+      geometrySnapshot: snap.geometrySnapshot,
+    })
+  }, [frames, pushState])
+
+  const handleUndo = useCallback(() => {
+    const prev = undo()
+    if (!prev) return
+    viewport.current?.restoreSceneSnapshot?.(prev)
+    setNodes(prev.nodes)
+    setFrames(prev.frames)
+    setSelected(prev.selected)
+    setSelectedIds(prev.selectedIds)
+    selectionRef.current = { selected: prev.selected, ids: prev.selectedIds }
+    const nextTransform = prev.selected ? prev.transforms[prev.selected] ?? viewport.current?.getTransform(prev.selected) : null
+    if (nextTransform) setTransform(nextTransform)
+    if (prev.selected) setPivotValue(prev.pivots[prev.selected] ?? [0, 0, 0])
+    announce('Undid last action')
+  }, [undo, announce])
+
+  const handleRedo = useCallback(() => {
+    const next = redo()
+    if (!next) return
+    viewport.current?.restoreSceneSnapshot?.(next)
+    setNodes(next.nodes)
+    setFrames(next.frames)
+    setSelected(next.selected)
+    setSelectedIds(next.selectedIds)
+    selectionRef.current = { selected: next.selected, ids: next.selectedIds }
+    const nextTransform = next.selected ? next.transforms[next.selected] ?? viewport.current?.getTransform(next.selected) : null
+    if (nextTransform) setTransform(nextTransform)
+    if (next.selected) setPivotValue(next.pivots[next.selected] ?? [0, 0, 0])
+    announce('Redid action')
+  }, [redo, announce])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (shouldIgnoreHistoryShortcut(event.target)) return
+      const action = matchHistoryShortcut(event)
+      if (action === 'undo') {
+        event.preventDefault()
+        handleUndo()
+      } else if (action === 'redo') {
+        event.preventDefault()
+        handleRedo()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleUndo, handleRedo])
+
   const updateTransform = (group: 'position' | 'rotation' | 'scale', index: number, value: number) => {
     setTransform((current) => {
       const next = { ...current, [group]: [...current[group]] as [number, number, number] }
@@ -341,6 +412,7 @@ function App() {
       viewport.current?.setTransform(selected, next)
       return next
     })
+    commitHistorySnapshot()
   }
 
   const selectNode = useCallback((id: string, additive = false) => {
@@ -380,7 +452,9 @@ function App() {
       const targetTransform = viewport.current?.getTransform(targetId)
       return targetTransform ? [{ id: crypto.randomUUID(), targetId, time, ...targetTransform }] : []
     })
-    setFrames((current) => [...current.filter((frame) => !targets.includes(frame.targetId) || Math.abs(frame.time - time) > 0.001), ...keyframes].sort((a, b) => a.time - b.time))
+    const nextFrames = [...frames.filter((frame) => !targets.includes(frame.targetId) || Math.abs(frame.time - time) > 0.001), ...keyframes].sort((a, b) => a.time - b.time)
+    setFrames(nextFrames)
+    commitHistorySnapshot(undefined, nextFrames)
     announce(`${keyframes.length} keyframe${keyframes.length === 1 ? '' : 's'} added at ${time.toFixed(2)}s`)
   }
 
@@ -395,7 +469,9 @@ function App() {
       const key = `model-${Array.from(new Uint8Array(digest).slice(0, 12), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
       const imported = await viewport.current?.loadModel(file, key, resources, resources.map(resourcePath))
       if (!imported) return
-      setNodes([...initialNodes, ...imported])
+      clearHistory()
+      const nextNodes = [...initialNodes, ...imported]
+      setNodes(nextNodes)
       setFrames([])
       setEffects([])
       setPlaying(false)
@@ -404,6 +480,7 @@ function App() {
       setAssetResourcePaths(resources.map(resourcePath))
       setAssetKey(key)
       if (imported[0]) selectNode(imported[0].id)
+      commitHistorySnapshot(nextNodes, [])
       announce(`${file.name} imported`)
     } catch (error) {
       announce(error instanceof Error ? error.message : 'Could not load this model')
@@ -412,8 +489,10 @@ function App() {
 
   const toggleVisibility = (node: SceneNode) => {
     const visible = !node.visible
-    setNodes((current) => current.map((item) => item.id === node.id ? { ...item, visible } : item))
+    const nextNodes = nodes.map((item) => item.id === node.id ? { ...item, visible } : item)
+    setNodes(nextNodes)
     viewport.current?.setVisible(node.id, visible)
+    commitHistorySnapshot(nextNodes)
   }
 
   const addSurfaceEffect = (kind: 'dissolve' | 'burn') => {
@@ -447,23 +526,58 @@ function App() {
   }
 
   const createProjectData = () => {
-    const modelIndex = assetFiles.findIndex((file) => /\.(glb|gltf)$/i.test(file.name))
-    const modelFile = assetFiles[modelIndex]
-    if (nodes.length > 0 && !modelFile) throw new Error('The source model is unavailable. Reimport it before exporting.')
-    if (!modelFile) throw new Error('Import a GLB or glTF model before exporting.')
-    const assetPaths = assetFiles.map((file, index) => `assets/${assetResourcePaths[index] || resourcePath(file)}`)
-    if (new Set(assetPaths).size !== assetPaths.length) throw new Error('Two selected files have the same path. Import them from a folder to preserve their structure.')
-    const savedNodes = nodes.filter((node) => node.id.startsWith(`${assetKey}:`))
-    const allTransforms = viewport.current?.getTransforms() ?? {}
-    const objects = Object.fromEntries(Object.entries(allTransforms).filter(([id]) => id.startsWith(`${assetKey}:`)))
-    return { format: 'forge-scene', version: 1, name: projectName, duration, assets: [{ key: assetKey, path: assetPaths[modelIndex], resources: assetPaths }], nodes: savedNodes, objects, tracks: frames, effects, pivots: viewport.current?.getPivots() ?? {} }
+    return buildProjectData({
+      projectName,
+      duration,
+      assetKey,
+      assetFiles,
+      assetResourcePaths,
+      nodes,
+      transforms: viewport.current?.getTransforms() ?? {},
+      frames,
+      effects,
+      pivots: viewport.current?.getPivots() ?? {},
+      cameraPose: viewport.current?.getCameraPose() ?? undefined,
+      envPreset,
+      xrEnabled,
+    })
+  }
+
+  const saveR3FCode = () => {
+    try {
+      const project = createProjectData()
+      const resolved = resolveExportAssetPath(assetFiles, assetResourcePaths, projectName)
+      const manifest = createDefaultManifest(projectName || 'ForgeScene', resolved.manifestAssetPath)
+      const cam = viewport.current?.getCameraPose()
+      if (cam) {
+        manifest.camera.position = cam.position
+        manifest.camera.target = cam.target
+        manifest.camera.fov = cam.fov
+      }
+      manifest.environment.preset = envPreset
+      manifest.environment.xrEnabled = xrEnabled
+      const transforms = viewport.current?.getTransforms() ?? {}
+      const pivots = viewport.current?.getPivots() ?? {}
+      manifest.nodes = project.nodes.map((n) => {
+        const t = transforms[n.id] ?? { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }
+        return { forgeId: n.id, name: n.name, parentId: n.parent, type: n.type, visible: n.visible, pivot: pivots[n.id], ...t }
+      })
+      manifest.keyframes = frames
+      const code = generateR3FComponent(manifest)
+      downloadBlob(new Blob([code], { type: 'text/plain;charset=utf-8' }), `${slug(projectName || 'ForgeScene')}.tsx`)
+      setExportMenuOpen(false)
+      announce('Exported React Three Fiber (.tsx)')
+    } catch (error) {
+      announce(error instanceof Error ? error.message : 'Could not export R3F component')
+    }
   }
 
   const saveRuntimeCode = async () => {
     try {
       const project = createProjectData()
-      downloadBlob(new Blob([createRuntimeSource(project)], { type: 'text/javascript;charset=utf-8' }), `${slug(projectName)}.forge.js`)
-      announce('Three.js animation module exported. Keep its assets/ folder paths beside it.')
+      downloadBlob(new Blob([generateRuntimeJs(project)], { type: 'text/javascript;charset=utf-8' }), `${slug(projectName)}.forge.js`)
+      setExportMenuOpen(false)
+      announce('Three.js animation module (.forge.js) exported. Keep its assets/ folder paths beside it.')
     } catch (error) { announce(error instanceof Error ? error.message : 'Could not export Three.js code') }
   }
 
@@ -471,19 +585,32 @@ function App() {
     let project: ReturnType<typeof createProjectData>
     try { project = createProjectData() }
     catch (error) { announce(error instanceof Error ? error.message : 'Could not save this project'); return }
-    const assetPaths = assetFiles.map((file, index) => `assets/${assetResourcePaths[index] || resourcePath(file)}`)
     try {
-    const JSZip = (await import('jszip')).default
-    const zip = new JSZip()
-    zip.file('project.json', JSON.stringify(project, null, 2))
-    assetFiles.forEach((file, index) => zip.file(assetPaths[index], file))
-    zip.file('src/main.js', createRuntimeSource(project))
-    zip.file('index.html', '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forge scene</title><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111317}</style></head><body><script type="module" src="./src/main.js"></script></body></html>')
-    zip.file('package.json', JSON.stringify({ name: 'forge-scene-export', private: true, type: 'module', scripts: { dev: 'vite' }, dependencies: { three: '^0.172.0', vite: '^6.0.7' } }, null, 2))
-    zip.file('README.md', '# Forge scene export\n\nRun `npm install` and `npm run dev`. This example uses Three.js WebGPURenderer with its WebGL 2 fallback.\n')
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } })
-    downloadBlob(blob, `${slug(projectName)}.forge.zip`)
-    announce('Portable project and runnable Three.js example saved')
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+      const entries = buildExportZipEntries({
+        projectName,
+        duration,
+        assetKey,
+        assetFiles,
+        assetResourcePaths,
+        nodes,
+        transforms: viewport.current?.getTransforms() ?? {},
+        frames,
+        effects,
+        pivots: viewport.current?.getPivots() ?? {},
+        cameraPose: viewport.current?.getCameraPose() ?? undefined,
+        envPreset,
+        xrEnabled,
+      })
+      for (const entry of entries) {
+        zip.file(entry.path, entry.content as string | File)
+      }
+      void project
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } })
+      downloadBlob(blob, `${slug(projectName)}.forge.zip`)
+      setExportMenuOpen(false)
+      announce('Portable project (.forge.zip) saved')
     } catch (error) { announce(error instanceof Error ? error.message : 'Could not create project export') }
   }
 
@@ -569,6 +696,7 @@ function App() {
     { id: 'move' as const, icon: Move3D, label: 'Move' },
     { id: 'rotate' as const, icon: Rotate3D, label: 'Rotate' },
     { id: 'scale' as const, icon: Box, label: 'Scale' },
+    { id: 'volume' as const, icon: Scan, label: '3D Box Volume Selector' },
   ]
 
   useEffect(() => {
@@ -592,16 +720,28 @@ function App() {
       <div className="brand"><div className="brand-mark"><Cuboid size={17} strokeWidth={1.8} /></div><span>forge</span><span className="brand-tag">BETA</span><div className="top-divider" /></div>
       <button className="project-title" onClick={() => { const name = window.prompt('Project name', projectName); if (name?.trim()) setProjectName(name.trim()) }}><span>{projectName}</span><ChevronDown size={14} /></button>
       <div className="save-status"><span className="status-dot" /> Local session</div>
-      <div className="top-actions"><button className="icon-button" title="Open project" onClick={() => projectInput.current?.click()}><FolderOpen size={16} /></button><button className="icon-button" title="Export Three.js animation code" onClick={() => { void saveRuntimeCode() }}><Code2 size={16} /></button><button className="icon-button" title="Save editable project and runnable app" onClick={() => { void saveProject() }}><Download size={16} /></button></div>
+      <div className="top-actions">
+        <button className="icon-button topbar-pill" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!canUndo} onClick={handleUndo}><Undo2 size={14} /><span>Undo</span></button>
+        <button className="icon-button topbar-pill" title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!canRedo} onClick={handleRedo}><Redo2 size={14} /><span>Redo</span></button>
+        <button className="icon-button" title="Open project" aria-label="Open project" onClick={() => projectInput.current?.click()}><FolderOpen size={16} /></button>
+        <div className="export-dropdown">
+          <button className="icon-button topbar-pill" title="Export scene" aria-label="Export" aria-expanded={exportMenuOpen} onClick={() => setExportMenuOpen((open) => !open)}><Download size={14} /><span>Export</span><ChevronDown size={13} /></button>
+          {exportMenuOpen && <div className="export-menu" role="menu">
+            <button role="menuitem" onClick={saveR3FCode}><span>React Three Fiber</span><strong>.tsx</strong></button>
+            <button role="menuitem" onClick={() => { void saveRuntimeCode() }}><span>Three.js Runtime</span><strong>.forge.js</strong></button>
+            <button role="menuitem" onClick={() => { void saveProject() }}><span>Project Archive</span><strong>.forge.zip</strong></button>
+          </div>}
+        </div>
+      </div>
     </header>
 
     <div className="workspace">
-      <aside className="left-rail"><div className="rail-group"><button className="rail-button active" title="Scene"><Layers3 size={18} /></button><button className="rail-button" title="Assets" onClick={() => fileInput.current?.click()}><Box size={18} /></button><button className="rail-button" title="Export runnable Three.js project" onClick={() => { void saveProject() }}><Code2 size={18} /></button></div></aside>
+      <aside className="left-rail"><div className="rail-group"><button className="rail-button active" title="Scene hierarchy"><Layers3 size={18} /></button><button className="rail-button" title="Import 3D asset" onClick={() => fileInput.current?.click()}><Box size={18} /></button><button className="rail-button" title="Open saved project (.forge.zip)" onClick={() => projectInput.current?.click()}>< Code2 size={18} /></button></div></aside>
 
       <aside className="scene-panel panel">
         <div className="panel-heading"><div><span className="eyebrow">PROJECT</span><h1>Scene</h1></div></div>
         <div className="scene-search"><Search size={14} /><input placeholder="Find an object..." value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /></div>
-        <div className="tree-toolbar"><span>HIERARCHY <span className="muted-count">{nodes.length}</span></span><button className="icon-button small" title="Import model" onClick={() => fileInput.current?.click()}><Plus size={16} /></button></div>
+        <div className="tree-toolbar"><span>HIERARCHY <span className="muted-count">{nodes.length}</span></span><div style={{ display: 'flex', gap: 4 }}><button className="icon-button small" title="Add Scene Camera (for cinematics & POV)" aria-label="Add Scene Camera" onClick={() => { const camNode = viewport.current?.addSceneCamera?.(); if (camNode) { commitHistorySnapshot(); announce(`${camNode.name} added at current view`) } }}><Video size={14} /></button><button className="icon-button small" title="Import model" onClick={() => fileInput.current?.click()}><Plus size={16} /></button></div></div>
         <div className="scene-tree">
           {visibleNodes.filter((node) => !node.parent || !nodes.some((parent) => parent.id === node.parent)).map((root) => renderTreeNode(root))}
           {nodes.length === 0 && <div className="empty-tree">Import a GLB or glTF model to populate the hierarchy.</div>}
@@ -611,8 +751,24 @@ function App() {
       </aside>
 
       <section className="center-column">
-        <div className="viewport-toolbar"><div className="tool-set">{toolButtons.map(({ id, icon: Icon, label }) => <button key={id} className={`tool-button ${activeTool === id ? 'chosen' : ''}`} title={label} onClick={() => { setBoxSelect(false); setActiveTool(id) }}><Icon size={16} /></button>)}<button className={`tool-button ${boxSelect ? 'chosen' : ''}`} title="Area select: drag to select visible parts" aria-label="Area select" aria-pressed={boxSelect} onClick={() => { setActiveTool('select'); setBoxSelect((value) => !value) }}><SquareDashed size={15} /></button></div><div className="tool-divider" /><div className="view-select"><Grid2X2 size={15} /> Perspective</div><div className="viewport-right"><span className="gpu-chip"><span className="gpu-light" />{rendererLabel}</span><button className={`tool-button ${wireframe ? 'chosen' : ''}`} title="Toggle wireframe" aria-pressed={wireframe} onClick={() => setWireframe((value) => !value)}><Triangle size={15} /></button><button className="tool-button" title="Frame selected object" disabled={!selectedNode} onClick={() => viewport.current?.frameObject(selected)}><Maximize2 size={15} /></button></div></div>
-        <div className="viewport-wrap"><Suspense fallback={<div className="scene-host"><div className="scene-loading"><div className="loading-mark">◈</div><span>Loading GPU viewport</span><small>Preparing renderer and scene</small></div></div>}><SceneViewport ref={viewport} selectedId={selected} selectedIds={selectedIds} activeTool={activeTool} boxSelect={boxSelect} onSelect={selectNode} onSelectMany={selectMany} onNodesChange={setNodes} onRendererChange={setRendererLabel} onRendererError={setRendererError} onTransformChange={setTransform} /></Suspense>{rendererError && <div className="renderer-error"><strong>3D preview unavailable</strong><span>{rendererError}</span><small>Try a browser with WebGPU or WebGL 2 support and enable hardware acceleration.</small></div>}<div className="viewport-caption"><span><span className="live-dot" /> LIVE PREVIEW</span><span>{boxSelect ? 'Drag over parts · Shift adds · right-to-left crosses' : 'Click a part to select · drag to orbit'} <i /> Pan: right drag <i /> Zoom: scroll</span></div><div className="viewport-axis"><div className="axis-y">Y</div><div className="axis-x">X</div><div className="axis-z">Z</div></div></div>
+        <div className="viewport-toolbar">
+          <div className="tool-set">
+            {toolButtons.map(({ id, icon: Icon, label }) => <button key={id} className={`tool-button ${activeTool === id ? 'chosen' : ''}`} title={label} aria-label={label} onClick={() => { setBoxSelect(false); setActiveTool(id); if (id === 'volume') viewport.current?.setVolumeBoxMode?.(volumeBoxMode) }}><Icon size={16} /></button>)}
+            <button className={`tool-button ${boxSelect ? 'chosen' : ''}`} title="2D Marquee Select (or Alt+Drag)" aria-label="2D Marquee Select" aria-pressed={boxSelect} onClick={() => { setActiveTool('select'); setBoxSelect((value) => !value) }}><SquareDashed size={15} /></button>
+          </div>
+          {activeTool === 'volume' && <>
+            <div className="tool-divider" />
+            <button className={`tool-button toolbar-select ${volumeBoxMode === 'translate' ? 'chosen' : ''}`} title="Move 3D selection box" onClick={() => { setVolumeBoxModeState('translate'); viewport.current?.setVolumeBoxMode?.('translate') }}>Move 3D Box</button>
+            <button className={`tool-button toolbar-select ${volumeBoxMode === 'scale' ? 'chosen' : ''}`} title="Resize 3D selection box" onClick={() => { setVolumeBoxModeState('scale'); viewport.current?.setVolumeBoxMode?.('scale') }}>Resize 3D Box</button>
+            <button className="tool-button toolbar-select" title="Extract triangles inside 3D volume box into a new part" onClick={() => { const res = viewport.current?.extractBoxSelection?.(); if (res && res.extractedCount > 0) { setActiveTool('move'); commitHistorySnapshot(); announce(`Extracted ${res.extractedCount} triangles into ${res.extractedIds.length} movable part(s)`) } else announce('Position the 3D Box over mesh geometry to extract triangles') }}>Extract Part</button>
+          </>}
+          <div className="tool-divider" />
+          <div className="view-select"><Grid2X2 size={15} /> Perspective</div>
+          <select aria-label="Environment preset" title="Environment preset" className="tool-button toolbar-select" value={envPreset} onChange={(e) => { const next = e.target.value as EnvironmentPresetId; setEnvPreset(next); viewport.current?.applyEnvironmentPreset(next); announce(`Environment: ${next}`) }}><option value="studio">Studio</option><option value="sunset">Sunset</option><option value="night">Night</option><option value="warehouse">Warehouse</option><option value="xr-stage">XR Stage</option></select>
+          <button className={`tool-button toolbar-select ${xrEnabled ? 'chosen' : ''}`} title="Toggle WebXR export support" aria-pressed={xrEnabled} onClick={() => { setXrEnabled((v) => !v); announce(`WebXR export ${!xrEnabled ? 'enabled' : 'disabled'}`) }}>WebXR</button>
+          <div className="viewport-right"><span className="gpu-chip"><span className="gpu-light" />{rendererLabel}</span><button className={`tool-button ${wireframe ? 'chosen' : ''}`} title="Toggle wireframe" aria-pressed={wireframe} onClick={() => setWireframe((value) => !value)}><Triangle size={15} /></button><button className="tool-button" title="Frame selected object" disabled={!selectedNode} onClick={() => viewport.current?.frameObject(selected)}><Maximize2 size={15} /></button></div>
+        </div>
+        <div className="viewport-wrap"><Suspense fallback={<div className="scene-host"><div className="scene-loading"><div className="loading-mark">◈</div><span>Loading GPU viewport</span><small>Preparing renderer and scene</small></div></div>}><SceneViewport ref={viewport} selectedId={selected} selectedIds={selectedIds} activeTool={activeTool} boxSelect={boxSelect} onSelect={selectNode} onSelectMany={selectMany} onNodesChange={setNodes} onRendererChange={setRendererLabel} onRendererError={setRendererError} onTransformChange={setTransform} onTransformCommit={() => commitHistorySnapshot()} /></Suspense>{rendererError && <div className="renderer-error"><strong>3D preview unavailable</strong><span>{rendererError}</span><small>Try a browser with WebGPU or WebGL 2 support and enable hardware acceleration.</small></div>}<div className="viewport-caption"><span><span className="live-dot" /> LIVE PREVIEW</span><span>{activeTool === 'volume' ? 'Move or resize the 3D Box · Click Extract Part to split selected triangles' : boxSelect ? 'Drag over parts · Shift adds · right-to-left crosses' : 'Click to select · Alt+Click cycles inner mesh · Alt+Drag marquee'} <i /> Pan: right drag <i /> Zoom: scroll</span></div><div className="viewport-axis"><div className="axis-y">Y</div><div className="axis-x">X</div><div className="axis-z">Z</div></div></div>
         <div className="timeline">
           <div className="timeline-head"><div className="timeline-title"><Video size={16} /><strong>Timeline</strong><span className="timeline-separator" /><span className="duration-button">{duration}s</span></div><div className="timeline-controls"><button className="icon-button small" title="Previous keyframe" disabled={!filteredFrames.some((frame) => frame.time < time)} onClick={() => { const previous = [...filteredFrames].reverse().find((frame) => frame.time < time); if (previous) seek(previous.time) }}><ChevronDown className="rotate-90" size={15} /></button><button className="play-button" disabled={!selectedNode} onClick={() => setPlaying((value) => !value)} title={playing ? 'Pause' : 'Play'}>{playing ? <Pause size={14} /> : <Play size={14} fill="currentColor" />}</button><button className="icon-button small" title="Next keyframe" disabled={!filteredFrames.some((frame) => frame.time > time)} onClick={() => { const next = filteredFrames.find((frame) => frame.time > time); if (next) seek(next.time) }}><ChevronDown className="rotate-minus-90" size={15} /></button><span className="time-readout">{time.toFixed(2)} <span>/ {duration.toFixed(2)} s</span></span></div></div>
           <div className="timeline-body"><div className="tracks"><div className="track-name"><ChevronRight size={13} /><span className="track-color" /><span>{selectedNode?.name ?? 'Select an object'}{selectedIds.length > 1 ? ` + ${selectedIds.length - 1}` : ''}</span><button className="track-add" title={`Add keyframe for ${selectedIds.length || 1} selected object(s)`} disabled={!selectedNode} onClick={addKeyframe}><Plus size={14} /></button></div><div className="track-name property"><span className="track-indent-line" /><span className="property-dot position" /><span>Position</span></div><div className="track-name property"><span className="track-indent-line" /><span className="property-dot rotation" /><span>Rotation</span></div><div className="track-name property"><span className="track-indent-line" /><span className="property-dot scale" /><span>Scale</span></div></div>
@@ -622,18 +778,20 @@ function App() {
       </section>
 
       <aside className="inspector panel"><div className="inspector-heading"><div><span className="eyebrow">INSPECTOR</span><h2>{selectedNode?.name ?? 'No selection'}</h2></div></div>
-        {selectedNode ? <><div className="object-meta"><div className="object-type-icon"><Box size={17} /></div><div><strong>{selectedNode.type}</strong><span>Scene object</span></div><button className="visibility-pill" onClick={() => toggleVisibility(selectedNode)}>{selectedNode.visible ? <Eye size={14} /> : <EyeOff size={14} />}</button></div>
-          <div className="inspector-section"><div className="section-title"><span>TRANSFORM</span><button className="icon-button tiny" title="Reset transform and pivot" onClick={() => { viewport.current?.resetTransform(selected); const initial = viewport.current?.getTransform(selected); if (initial) setTransform(initial); setPivotValue([0, 0, 0]) }}><Activity size={14} /></button></div>
-            {(['position', 'rotation', 'scale'] as const).map((group) => <div className="vector-control" key={group}><span className="vector-label">{group === 'position' ? 'Position' : group === 'rotation' ? 'Rotation' : 'Scale'}</span><div className="vector-inputs">{transform[group].map((value, index) => <label key={index} className={`vector-cell axis-${'xyz'[index]}`}><span>{'XYZ'[index]}</span><input value={group === 'rotation' ? (value * 180 / Math.PI).toFixed(1) : value.toFixed(2)} type="number" step={group === 'rotation' ? '1' : '0.1'} onChange={(event) => updateTransform(group, index, Number(event.target.value) * (group === 'rotation' ? Math.PI / 180 : 1))} /></label>)}</div></div>)}
+        {selectedNode ? <><div className="object-meta"><div className="object-type-icon"><Box size={17} /></div><div><strong>{selectedNode.type}</strong><span>Scene object</span></div><button className="visibility-pill" title={selectedNode.visible ? 'Hide object' : 'Show object'} aria-label={selectedNode.visible ? 'Hide object' : 'Show object'} onClick={() => toggleVisibility(selectedNode)}>{selectedNode.visible ? <Eye size={14} /> : <EyeOff size={14} />}</button></div>
+          <div className="inspector-section"><div className="section-title"><span>TRANSFORM</span><button className="icon-button tiny" title="Reset transform and pivot" aria-label="Reset transform and pivot" onClick={() => { viewport.current?.resetTransform(selected); const initial = viewport.current?.getTransform(selected); if (initial) setTransform(initial); setPivotValue([0, 0, 0]); commitHistorySnapshot() }}><RotateCcw size={14} /></button></div>
+            {(['position', 'rotation', 'scale'] as const).map((group) => <div className="vector-control" key={group}><span className="vector-label">{group === 'position' ? 'Position' : group === 'rotation' ? 'Rotation (°)' : 'Scale'}</span><div className="vector-inputs">{transform[group].map((value, index) => <label key={index} className={`vector-cell axis-${'xyz'[index]}`}><span>{'XYZ'[index]}</span><input value={group === 'rotation' ? (value * 180 / Math.PI).toFixed(1) : value.toFixed(2)} type="number" step={group === 'rotation' ? '1' : '0.1'} onChange={(event) => updateTransform(group, index, Number(event.target.value) * (group === 'rotation' ? Math.PI / 180 : 1))} /></label>)}</div></div>)}
           </div>
-          {selectedNode.type === 'Mesh' && <div className="inspector-section pivot-section"><div className="section-title"><span>PIVOT</span></div><p className="effect-description">Move the part’s origin to its hinge or shaft before animating rotation.</p><button className="effect-action" onClick={() => { const next = viewport.current?.setPivotFromLastHit(selected); if (next) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); announce('Pivot moved to the last clicked point') } else announce('Click the mesh surface first, then set its pivot') }}>Set from last clicked surface</button><div className="vector-control pivot-control"><span className="vector-label">Local point</span><div className="vector-inputs">{pivot.map((value, index) => <label key={index} className={`vector-cell axis-${'xyz'[index]}`}><span>{'XYZ'[index]}</span><input aria-label={`Pivot ${'XYZ'[index]}`} type="number" step="0.05" value={value.toFixed(2)} onChange={(event) => { const next = [...pivot] as [number, number, number]; next[index] = Number(event.target.value); if (viewport.current?.setPivot(selected, next)) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated) } }} /></label>)}</div></div><button className="effect-action remove" disabled={pivot.every((value) => Math.abs(value) < 1e-8)} onClick={() => { viewport.current?.setPivot(selected, [0, 0, 0]); setPivotValue([0, 0, 0]); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated) }}>Reset pivot</button></div>}
+          {selectedNode.type === 'Camera' && <div className="inspector-section pivot-section"><div className="section-title"><span>CAMERA POV & CINEMATICS</span></div><p className="effect-description">Move or rotate this camera with the gizmo and add keyframes on the timeline for cinematic shots.</p><div className="effect-button-row"><button className="effect-action" onClick={() => { viewport.current?.setActivePovCamera?.(selected); announce(`Viewing through ${selectedNode.name}`) }}>Look Through Camera (POV)</button><button className="effect-action" onClick={() => { const pose = viewport.current?.getCameraPose(); if (pose) { announce('Camera aligned to current viewport') } }}>Align to Current View</button></div></div>}
+          {selectedNode.type === 'Mesh' && <div className="inspector-section pivot-section"><div className="section-title"><span>PART BREAKING</span></div><p className="effect-description">Click any spot on the model while 3D Box is active to snap the box there, or use a quick slice preset below.</p><div className="effect-button-row"><button className="effect-action" onClick={() => { const updated = viewport.current?.splitSelectedMesh(selected, 'islands'); if (updated) { setNodes(updated); commitHistorySnapshot(updated); announce('Split mesh into loose parts') } else announce('Mesh is already a single connected part — use 3D Box to slice') }}>Split Loose Parts</button><button className="effect-action" onClick={() => { const updated = viewport.current?.splitSelectedMesh(selected, 'materials'); if (updated) { setNodes(updated); commitHistorySnapshot(updated); announce('Split mesh by material groups') } else announce('Mesh has only one material group') }}>Split by Material</button></div><div className="effect-button-row"><button className="effect-action" onClick={() => { setBoxSelect(false); setActiveTool('volume'); viewport.current?.setVolumeBoxMode?.(volumeBoxMode); viewport.current?.applyVolumePreset?.('top'); announce('3D Box snapped to Top Half — click anywhere on mesh to snap box to that spot') }}>3D Box Selector</button><button className="effect-action" onClick={() => { const res = viewport.current?.extractBoxSelection?.(); if (res && res.extractedCount > 0) { setActiveTool('move'); commitHistorySnapshot(); announce(`Clean-sliced ${res.extractedCount} triangles into new movable part`) } else announce('Enable 3D Box Selector and position it over triangles first') }}>Extract 3D Box Part</button></div><div className="effect-button-row"><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('top'); announce('3D Box: Top Half') }}>Top Half</button><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('bottom'); announce('3D Box: Bottom Half') }}>Bottom Half</button><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('left'); announce('3D Box: Left Half') }}>Left</button><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('right'); announce('3D Box: Right Half') }}>Right</button></div><button className="effect-action" onClick={() => { const count = viewport.current?.smoothSelectedMesh?.(selected) ?? 0; if (count > 0) { commitHistorySnapshot(); announce('Smoothed spiky boundary edges on selected mesh') } else announce('No jagged open boundary edges found on this mesh') }}>Smooth Spiky Edges</button></div>}
+          {selectedNode.type === 'Mesh' && <div className="inspector-section pivot-section"><div className="section-title"><span>PIVOT</span></div><p className="effect-description">Move the part’s origin to its hinge or shaft before animating rotation.</p><button className="effect-action" onClick={() => { const next = viewport.current?.setPivotFromLastHit(selected); if (next) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot(); announce('Pivot moved to the last clicked point') } else announce('Click the mesh surface first, then set its pivot') }}>Set from last clicked surface</button><div className="vector-control pivot-control"><span className="vector-label">Local point</span><div className="vector-inputs">{pivot.map((value, index) => <label key={index} className={`vector-cell axis-${'xyz'[index]}`}><span>{'XYZ'[index]}</span><input aria-label={`Pivot ${'XYZ'[index]}`} type="number" step="0.05" value={value.toFixed(2)} onChange={(event) => { const next = [...pivot] as [number, number, number]; next[index] = Number(event.target.value); if (viewport.current?.setPivot(selected, next)) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot() } }} /></label>)}</div></div><button className="effect-action remove" disabled={pivot.every((value) => Math.abs(value) < 1e-8)} onClick={() => { viewport.current?.setPivot(selected, [0, 0, 0]); setPivotValue([0, 0, 0]); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot() }}>Reset pivot</button></div>}
           {objectStats && <div className="inspector-section geometry-section"><div className="section-title"><span>GEOMETRY</span></div><div className="geometry-grid"><span>Meshes</span><strong>{objectStats.meshCount.toLocaleString()}</strong><span>Vertices</span><strong>{objectStats.vertexCount.toLocaleString()}</strong><span>Triangles</span><strong>{objectStats.triangleCount.toLocaleString()}</strong><span>Materials</span><strong>{objectStats.materialCount.toLocaleString()}</strong><span>Bounds</span><strong>{objectStats.dimensions.map((value) => value.toFixed(2)).join(' × ')}</strong></div></div>}
           {selectedNode.type === 'Mesh' && <div className="inspector-section effect-section">
             <div className="section-title"><span>VISUAL EFFECTS</span></div>
             {(() => {
               const surface = effects.find((item): item is SurfaceEffect => item.targetId === selected && isSurfaceEffect(item))
               const particles = effects.find((item): item is Extract<SceneEffect, { kind: 'particles' }> => item.targetId === selected && item.kind === 'particles')
-              const timing = (effect: SceneEffect) => <div className="effect-input-row"><label>Start<input aria-label={`${effect.kind ?? 'dissolve'} start`} type="number" min="0" max={Math.max(0, effect.endTime - 0.05)} step="0.05" value={effect.startTime} onChange={(event) => updateEffect(effect.kind ?? 'dissolve', { startTime: Math.max(0, Math.min(Number(event.target.value), effect.endTime - 0.05)) })} /></label><label>End<input aria-label={`${effect.kind ?? 'dissolve'} end`} type="number" min={effect.startTime + 0.05} max={duration} step="0.05" value={effect.endTime} onChange={(event) => updateEffect(effect.kind ?? 'dissolve', { endTime: Math.max(effect.startTime + 0.05, Math.min(duration, Number(event.target.value))) })} /></label></div>
+              const timing = (effect: SceneEffect) => <div className="effect-input-row"><label>Start (s)<input aria-label={`${effect.kind ?? 'dissolve'} start`} type="number" min="0" max={Math.max(0, effect.endTime - 0.05)} step="0.05" value={effect.startTime} onChange={(event) => updateEffect(effect.kind ?? 'dissolve', { startTime: Math.max(0, Math.min(Number(event.target.value), effect.endTime - 0.05)) })} /></label><label>End (s)<input aria-label={`${effect.kind ?? 'dissolve'} end`} type="number" min={effect.startTime + 0.05} max={duration} step="0.05" value={effect.endTime} onChange={(event) => updateEffect(effect.kind ?? 'dissolve', { endTime: Math.max(effect.startTime + 0.05, Math.min(duration, Number(event.target.value))) })} /></label></div>
               return <>
                 {surface ? <>
                   <div className="effect-progress"><span>{surface.kind === 'burn' ? 'Burn progress' : 'Dissolve progress'}</span><strong>{Math.round(dissolveProgress(surface, time) * 100)}%</strong></div>
