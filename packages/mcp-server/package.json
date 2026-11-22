@@ -1,0 +1,18 @@
+{
+  "name": "@forge-3d/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone stdio MCP server for reading/writing .forge/scene.json and syncing R3F code exports.",
+  "bin": {
+    "forge-3d-mcp": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node ./src/index.ts",
+    "typecheck": "../../node_modules/.bin/tsc -p ./tsconfig.json --noEmit",
+    "test": "node --test ./test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

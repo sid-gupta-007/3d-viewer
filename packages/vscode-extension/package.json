@@ -1,0 +1,73 @@
+{
+  "name": "forge3d-studio",
+  "displayName": "Forge3D Studio",
+  "description": "Visual 3D scene authoring and R3F/Three.js code bridge for .glb, .gltf, and .forge.json files.",
+  "version": "0.1.0",
+  "publisher": "forge3d",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:forge3d.openStudio",
+    "onCustomEditor:forge3d.sceneEditor"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "forge3d.openStudio",
+        "title": "Forge3D: Open Studio"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "forge3d.sceneEditor",
+        "displayName": "Forge3D Studio",
+        "selector": [
+          {
+            "filenamePattern": "*.glb"
+          },
+          {
+            "filenamePattern": "*.gltf"
+          },
+          {
+            "filenamePattern": "*.forge.json"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "configuration": {
+      "title": "Forge3D Studio",
+      "properties": {
+        "forge3d.studioDevUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Vite dev server URL (e.g. http://localhost:5173) to load the Forge3D Studio UI inside the Webview."
+        },
+        "forge3d.defaultTargetFile": {
+          "type": "string",
+          "default": "src/ForgeScene.tsx",
+          "description": "Default workspace .tsx/.ts file to patch when no explicit targetPath is provided."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "typecheck": "tsc --noEmit",
+    "bundle": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "test": "npm run compile && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}

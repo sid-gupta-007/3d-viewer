@@ -26,6 +26,37 @@ The most useful expansion sequence is: (1) dependable mesh selection and transfo
 
 The first product phase is intentionally narrow: import GLB/glTF, animate position/rotation/scale on selected nodes, scrub and preview the timeline, then produce Three.js output a developer can run or adapt. The editor now has direct generated entry-code export that embeds project/animation data, plus the editable ZIP project export. The remaining phase-one gate is to run a representative exported project independently, compare its hierarchy/transforms/playback against Forge, and fix any mismatch before calling the pipeline complete.
 
+## Phase 2 — Per-part authoring and visual effects
+
+### Authoring workflow for articulated assets
+
+The target is any multi-part GLB/glTF, not one category of model. A drone can check rotation, an elevator or machine can check nested moving parts, and a product/architectural asset can check selection and group transforms. The first selection pass now has an explicit marquee-select mode: left-to-right selects fully enclosed meshes, right-to-left selects intersecting meshes, Shift adds, and hierarchy modifiers toggle nodes. Group transforms and separate per-node keyframes are supported. A box-select gesture does not start camera orbit. The dense articulated test asset verified visible selection, additive multi-selection, group movement, and topology display in a live WebGPU browser session; broader asset and nested-transform coverage remains open.
+
+Rotor rotation depends on the mesh node's pivot. If the GLB has a rotor joint/group with its origin at the shaft, animate that parent node. If the asset has a misplaced origin, use a dedicated pivot-edit operation that preserves the visible pose and serializes the pivot with the project; do not fake this by translating the blade geometry or by assuming all GLBs have the same hierarchy.
+
+### Modular boundaries
+
+- `domain/scene`: stable node IDs, transforms, visibility, and project serialization; no React or Three.js objects.
+- `features/selection`: click/marquee selection, modifier-add/toggle behavior, and selected IDs.
+- `features/animation`: time sampling, transform tracks, playback state, and keyframe commands.
+- `features/effects`: effect definitions and parameters, beginning with dissolve; each effect has preview, save/load, and export adapters.
+- `renderer/three`: applies scene data/effects to Three.js and owns GPU resources and disposal.
+- `export/three`: generates runtime code from the same versioned scene and animation data used by the editor.
+- `ui`: panels and controls that call feature APIs rather than mutating Three.js objects directly.
+
+Keep authored effect values serializable and renderer-independent. Put TSL/WebGPU-specific shader code behind the renderer adapter; don't put shader state in React or the timeline. This lets effects be previewed in the editor and regenerated for the exported runtime without coupling the project format to one rendering backend.
+
+### Phase 2 implementation status
+
+The Phase 2 feature pass is implemented:
+
+- Mesh click picking resolves the frontmost visible mesh and ignores hidden ancestors. Marquee selection has containment and crossing modes, modifier-add behavior, multi-selection, and group transform controls.
+- Meshes can be inspected for vertex/triangle/material counts and toggled into wireframe. Local pivot editing supports last-hit placement and numeric adjustment while preserving the current visible pose; pivot values are included in project data.
+- Per-mesh effects include reversible, playhead-driven dissolve and burn surface effects plus deterministic GPU-vertex-animated point particles. Timing and effect settings are serializable. The editor preview and generated Three.js runtime have adapters for the same effect data.
+- Automated checks cover visible picking, marquee selection, additive selection, pivot pose preservation/reset, effect timing, and effect-schema bounds. The production build and generated-runtime syntax check pass.
+
+Phase 2 implementation and its defined acceptance workflow are complete on the test fixture, but this is not a production-readiness certification. A live WebGPU browser session verified visible mesh selection, marquee selection, multi-selection and group movement; wireframe and geometry counts; project archive reopen with transforms, pivot, keyframes and effects; and dissolve/burn/particle preview. The generated Three.js runtime was also served independently and verified for rotor animation and visible effects without browser console errors. These checks use a generated dense articulated GLTF fixture and a generated project archive, not a matrix of external customer assets, GPUs, and browsers. The actual UI download-to-disk flow and external-resource folder imports were not exercised because the task is restricted to editing this repo. The particles are GPU vertex-shader animated points with a bounded configurable count; they are not a compute-based fluid, collision, or destruction system.
+
 ## Execution plan
 
 ### P0 — Correctness and data integrity
@@ -43,7 +74,7 @@ The first product phase is intentionally narrow: import GLB/glTF, animate positi
 - Define transform keyframe interpolation, endpoint behavior, loop behavior, and rotation semantics.
 - Support selecting, moving, deleting, and navigating keyframes; make playhead scrubbing work by mouse and keyboard.
 - Add undo/redo for scene edits and model replacement.
-- Add explicit pivot handling, visibility authoring, and accurate material inspection before adding material editing.
+- Complete visibility authoring and accurate material inspection before adding material editing. Pivot editing is now implemented; verify it across nested real assets.
 - Expand mesh diagnostics with bounds, wireframe, isolation, normals, draw-call/material grouping, and a model-health report for missing or unsupported asset data.
 - Persist recoverable local sessions in IndexedDB and report save state.
 
@@ -77,4 +108,4 @@ The first product phase is intentionally narrow: import GLB/glTF, animate positi
 
 ## Current execution status
 
-The current pass addresses the P0 issues identified in the audit: scene/hierarchy resynchronization, hierarchy depth, imported framing, baseline transform reset, stricter archive validation, relative export entry URL, and removal of misleading controls. The current UX pass adds visible selected-row feedback, selected-object bounds, per-node viewport picking in transform modes, mesh/vertex/triangle/material/bounds statistics, a wireframe toggle, and direct generated Three.js entry-code export with embedded project/animation data. `npm run build` passes. Independent runtime playback verification and a live pointer interaction check with representative assets are still needed. P1–P4 remain planned work; do not describe the product as production-ready until their acceptance criteria are met.
+The implementation includes the P0 fixes identified in the audit, the selection/transform/diagnostics UX pass, and the Phase 2 feature set above. `npm test`, `npm run typecheck`, `npm run build`, and generated runtime syntax validation pass on the current `phase-2` branch. A generated dense articulated GLTF fixture and saved-project archive were used for live browser checks of Phase 2 preview and interactions, and the generated runtime was independently served and inspected. The Phase 2 feature milestone is complete on that defined fixture workflow. External-asset/browser/device coverage, the UI download-to-disk path, and P1–P4 release criteria remain open; do not describe Forge as production-ready until those acceptance checks pass.
