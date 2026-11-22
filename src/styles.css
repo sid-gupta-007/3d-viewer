@@ -8,3 +8,55 @@
 .status-right a{display:flex;align-items:center;gap:4px;color:#85878d;font-size:9px;text-decoration:none}.status-right a:hover{color:#d5d6d9}.tool-button:disabled,.icon-button:disabled,.play-button:disabled,.track-add:disabled{opacity:.35;cursor:default}
 
 .effect-section{padding:13px 12px 15px;border-bottom:1px solid #27282b}.effect-description{margin:0 0 10px;color:#888a91;font-size:10px;line-height:1.55}.effect-action{width:100%;min-height:29px;border:1px solid #353b2d;border-radius:5px;background:#1d2119;color:#b8e879;font-size:10px}.effect-action:hover:not(:disabled){background:#252b1d;border-color:#596742}.effect-action:disabled{opacity:.45;cursor:not-allowed}.effect-action.remove{margin-top:9px;color:#d69b91;border-color:#46332f;background:#211a19}.effect-progress{display:flex;justify-content:space-between;margin:0 0 9px;color:#999ba2;font-size:10px}.effect-progress strong{color:#b8e879;font:10px 'DM Mono',monospace}.effect-input-row{display:flex;gap:7px;margin-bottom:8px}.effect-input-row label{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px;color:#8c8e95;font-size:9px}.effect-input-row input{width:100%;height:26px;padding:0 6px;border:1px solid #303135;border-radius:4px;background:#1b1c1f;color:#d0d1d5;font:10px 'DM Mono',monospace}.effect-input-row input.effect-color{padding:2px;height:26px}.effect-button-row{display:flex;gap:7px;margin-bottom:10px}.effect-subsection-title{margin:14px 0 8px;padding-top:10px;border-top:1px solid #292a2d;color:#9b9da4;font-size:9px;letter-spacing:.12em}.effect-single-input{display:flex;flex-direction:column;gap:5px;margin:0 0 8px;color:#8c8e95;font-size:9px}.effect-single-input input{height:26px;padding:0 6px;border:1px solid #303135;border-radius:4px;background:#1b1c1f;color:#d0d1d5;font:10px 'DM Mono',monospace}.center-column{min-width:0;overflow:hidden}.viewport-toolbar{flex-wrap:wrap;height:auto;min-height:44px;padding:6px 14px;row-gap:6px}.toolbar-select{width:auto;min-width:86px;padding:0 8px}.topbar-pill{width:auto;padding:0 9px;display:inline-flex;align-items:center;gap:5px;font-size:11px;border:1px solid #2b2d31;background:#1b1c20}.export-dropdown{position:relative;display:inline-flex}.export-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:40;min-width:190px;padding:5px;border:1px solid #2e3036;border-radius:6px;background:#18191d;box-shadow:0 10px 24px rgba(0,0,0,.45);display:flex;flex-direction:column;gap:3px}.export-menu button{display:flex;justify-content:space-between;align-items:center;width:100%;padding:7px 9px;border:0;border-radius:4px;background:transparent;color:#d5d7dc;font-size:11px;text-align:left}.export-menu button:hover{background:#252830;color:#b7f36b}.lasso-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
+
+/* Custom sleek scrollbars & hide ugly default white browser number spin buttons */
+*::-webkit-scrollbar{width:6px;height:6px}*::-webkit-scrollbar-track{background:#121316}*::-webkit-scrollbar-thumb{background:#2e3138;border-radius:99px}*::-webkit-scrollbar-thumb:hover{background:#4b515c}
+input[type="number"]{appearance:textfield;-moz-appearance:textfield}
+input[type="number"]::-webkit-inner-spin-button,input[type="number"]::-webkit-outer-spin-button{-webkit-appearance:none;appearance:none;margin:0}
+
+/* Blender-style Inspector Property Tabs & Collapsible Sections */
+.inspector{width:308px;display:flex;flex-direction:column;overflow-x:hidden;overflow-y:auto}
+.inspector-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:8px 12px;border-bottom:1px solid #27282b;background:#131417;position:sticky;top:0;z-index:6}
+.inspector-tab{height:28px;border:1px solid #282a2f;border-radius:5px;background:#191b1f;color:#8e9098;font:600 10px Manrope,sans-serif;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s}
+.inspector-tab:hover{background:#22252a;color:#e2e4e9}
+.inspector-tab.active{background:#252c1e;border-color:#4b5b38;color:var(--lime);box-shadow:inset 0 0 0 1px #4b5b3840}
+.section-header-btn{width:100%;display:flex;align-items:center;justify-content:space-between;padding:0;margin-bottom:10px;border:0;background:transparent;color:#9ea0a8;font:600 9.5px 'DM Mono',monospace;letter-spacing:.8px;text-align:left}
+.section-header-btn:hover{color:#e5e7ec}
+.section-header-left{display:flex;align-items:center;gap:6px}
+.inspector-section.collapsed{padding-bottom:6px}
+.inspector-section.collapsed .section-header-btn{margin-bottom:0}
+
+/* Scrubbable Vector Cells & Spin Arrows */
+.vector-control{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:9px 0}
+.vector-label{width:54px;flex:none;color:#9b9da3;font-size:10px}
+.vector-inputs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;flex:1;min-width:0}
+.vector-cell{position:relative !important;top:auto !important;left:auto !important;width:100% !important;height:27px;padding:0 4px;display:flex;align-items:center;gap:2px}
+.vector-cell>span{cursor:ew-resize;user-select:none;padding:1px 2px;border-radius:3px;flex:none}
+.vector-cell>span:hover{background:#2a2d33}
+.vector-cell input{flex:1;min-width:0;width:100%;padding:0}
+.vector-step-btns{display:flex;flex-direction:column;margin-left:1px;flex:none}
+.vector-step-btn{width:10px;height:11px;padding:0;border:0;background:transparent;color:#6f727a;display:grid;place-items:center;line-height:1;font-size:7px}
+.vector-cell.vec-x>span{color:#df8888}.vector-cell.vec-y>span{color:#8ecf8c}.vector-cell.vec-z>span{color:#83a6e9}
+.vector-step-btn:hover{color:var(--lime);background:#26292f;border-radius:2px}
+
+/* Responsive Timeline Header & Duration Stepper */
+.timeline-head{position:relative;flex-wrap:wrap;height:auto;min-height:41px;padding:6px 13px;gap:8px;justify-content:space-between}
+.timeline-controls{position:static;transform:none;margin-left:auto}
+.duration-stepper{display:inline-flex;align-items:center;gap:2px;padding:2px 4px;border:1px solid #2e3035;border-radius:5px;background:#1a1b1f}
+.duration-stepper input{width:38px;border:0;background:transparent;color:#d6d8dd;text-align:center;font:10px 'DM Mono',monospace;outline:none}
+.duration-step-btn{width:18px;height:18px;border:0;border-radius:3px;background:#23252a;color:#9ea1a9;display:grid;place-items:center;font-size:10px}
+.duration-step-btn:hover{background:#2f3429;color:var(--lime)}
+.timeline-scrubber-bar{display:flex;align-items:center;gap:8px;padding:4px 13px;border-bottom:1px solid #232428;background:#131417}
+.timeline-scrubber-bar input[type="range"]{flex:1;accent-color:var(--lime);height:4px;cursor:pointer}
+
+/* Adobe-style Rich Hover Info Card */
+.adobe-hover-card{position:fixed;z-index:100;width:270px;padding:11px 13px;border:1px solid #485637;border-radius:8px;background:linear-gradient(180deg,#1d2026 0%,#15171b 100%);box-shadow:0 14px 36px rgba(0,0,0,.68);color:#e3e5ea;pointer-events:none;animation:forgeFadeIn .16s ease-out}
+.adobe-hover-card .hover-badge{display:inline-block;margin-bottom:5px;padding:2px 6px;border-radius:4px;background:#27301e;color:var(--lime);font:600 8.5px 'DM Mono',monospace;letter-spacing:.6px}
+.adobe-hover-card h4{margin:0 0 5px;font:600 12px Manrope,sans-serif;color:#fff}
+.adobe-hover-card p{margin:0;color:#a5a8b1;font-size:10.5px;line-height:1.5}
+@keyframes forgeFadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* Responsive Workspace Breakpoints */
+body{min-width:680px}
+@media(max-width:1180px){.scene-panel{width:215px}.inspector{width:275px}.tracks{width:155px}.vector-cell{width:54px}.save-status{display:none}}
+@media(max-width:920px){.scene-panel{width:185px}.inspector{width:250px}.topbar{padding:0 10px;gap:8px}.topbar-pill span{display:none}}
