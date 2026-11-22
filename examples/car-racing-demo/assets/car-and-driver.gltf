@@ -1,0 +1,244 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Forge-3D-Demo-Builder"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "CarRacingWorld",
+      "nodes": [
+        0,
+        1
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Racing_Car",
+      "children": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "translation": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "Driver_Person",
+      "children": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "translation": [
+        -1.6,
+        0,
+        0.2
+      ]
+    },
+    {
+      "name": "Car_Body",
+      "mesh": 0,
+      "translation": [
+        0,
+        0.45,
+        0
+      ],
+      "scale": [
+        1.5,
+        0.45,
+        3.2
+      ]
+    },
+    {
+      "name": "Car_Door_Left",
+      "mesh": 0,
+      "translation": [
+        -0.78,
+        0.48,
+        0.4
+      ],
+      "scale": [
+        0.1,
+        0.42,
+        1.05
+      ]
+    },
+    {
+      "name": "Steering_Wheel",
+      "mesh": 0,
+      "translation": [
+        -0.36,
+        0.68,
+        0.35
+      ],
+      "scale": [
+        0.3,
+        0.3,
+        0.06
+      ]
+    },
+    {
+      "name": "Rear_View_Mirror",
+      "mesh": 0,
+      "translation": [
+        0,
+        0.96,
+        0.38
+      ],
+      "scale": [
+        0.34,
+        0.1,
+        0.04
+      ]
+    },
+    {
+      "name": "Windshield_Glass",
+      "mesh": 0,
+      "translation": [
+        0,
+        0.84,
+        0.52
+      ],
+      "scale": [
+        1.36,
+        0.48,
+        0.06
+      ]
+    },
+    {
+      "name": "Wheel_FL",
+      "mesh": 0,
+      "translation": [
+        -0.78,
+        0.26,
+        1.05
+      ],
+      "scale": [
+        0.22,
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "name": "Person_Torso",
+      "mesh": 0,
+      "translation": [
+        0,
+        0.92,
+        0
+      ],
+      "scale": [
+        0.38,
+        0.56,
+        0.22
+      ]
+    },
+    {
+      "name": "Person_Head",
+      "mesh": 0,
+      "translation": [
+        0,
+        1.38,
+        0
+      ],
+      "scale": [
+        0.24,
+        0.26,
+        0.24
+      ]
+    },
+    {
+      "name": "Person_RightArm",
+      "mesh": 0,
+      "translation": [
+        0.26,
+        0.96,
+        0
+      ],
+      "scale": [
+        0.12,
+        0.48,
+        0.12
+      ]
+    },
+    {
+      "name": "Person_Legs",
+      "mesh": 0,
+      "translation": [
+        0,
+        0.32,
+        0
+      ],
+      "scale": [
+        0.34,
+        0.64,
+        0.2
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "UnitBoxMesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 36,
+      "type": "VEC3",
+      "min": [
+        -0.5,
+        -0.5,
+        -0.5
+      ],
+      "max": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 36,
+      "type": "VEC3"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 432
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 432,
+      "byteLength": 432
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 864,
+      "uri": "data:application/octet-stream;base64,AAAAPwAAAD8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAD8AAAC/AAAAPwAAAL8AAAA/AAAAPwAAAL8AAAC/AAAAPwAAAD8AAAC/AAAAvwAAAD8AAAC/AAAAvwAAAL8AAAC/AAAAvwAAAD8AAAA/AAAAvwAAAL8AAAC/AAAAvwAAAL8AAAA/AAAAvwAAAD8AAAA/AAAAvwAAAD8AAAC/AAAAvwAAAD8AAAA/AAAAPwAAAD8AAAC/AAAAvwAAAD8AAAA/AAAAPwAAAD8AAAA/AAAAPwAAAD8AAAC/AAAAvwAAAL8AAAA/AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAA/AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAC/AAAAPwAAAL8AAAA/AAAAvwAAAD8AAAA/AAAAvwAAAL8AAAA/AAAAPwAAAD8AAAA/AAAAvwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAD8AAAA/AAAAPwAAAD8AAAC/AAAAPwAAAL8AAAC/AAAAvwAAAD8AAAC/AAAAPwAAAL8AAAC/AAAAvwAAAL8AAAC/AAAAvwAAAD8AAAC/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/"
+    }
+  ]
+}

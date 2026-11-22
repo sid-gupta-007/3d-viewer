@@ -670,3 +670,58 @@ export function smoothSpikyMeshEdges(mesh: THREE.Mesh, passes = 3): number {
   }
   return smoothedVertices
 }
+
+export type ScreenPoint = { x: number; y: number }
+
+export function isPointInPolygon(x: number, y: number, polygon: ScreenPoint[]): boolean {
+  if (polygon.length < 3) return false
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x
+    const yi = polygon[i].y
+    const xj = polygon[j].x
+    const yj = polygon[j].y
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi + 1e-12) + xi
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+export function selectTrianglesInScreenPolygon(
+  mesh: THREE.Mesh,
+  camera: THREE.Camera,
+  width: number,
+  height: number,
+  polygon: ScreenPoint[],
+): number[] {
+  if (!mesh || !mesh.isMesh || !mesh.geometry || polygon.length < 3 || width <= 0 || height <= 0) return []
+  const posAttr = mesh.geometry.getAttribute('position')
+  if (!posAttr || posAttr.count < 3) return []
+
+  mesh.updateWorldMatrix(true, false)
+  camera.updateMatrixWorld(true)
+  const skinned = mesh as THREE.SkinnedMesh
+  if (skinned.isSkinnedMesh && skinned.skeleton) skinned.skeleton.update()
+
+  const index = mesh.geometry.getIndex()
+  const triCount = index ? Math.floor(index.count / 3) : Math.floor(posAttr.count / 3)
+  const selected: number[] = []
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = index ? index.getX(t * 3) : t * 3
+    const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1
+    const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2
+    getVertexInWorld(mesh, posAttr, i0, scratchV0)
+    getVertexInWorld(mesh, posAttr, i1, scratchV1)
+    getVertexInWorld(mesh, posAttr, i2, scratchV2)
+    scratchCentroid.copy(scratchV0).add(scratchV1).add(scratchV2).multiplyScalar(1 / 3)
+    scratchCentroid.project(camera)
+    if (scratchCentroid.z < -1 || scratchCentroid.z > 1) continue
+    const sx = (scratchCentroid.x + 1) * 0.5 * width
+    const sy = (1 - scratchCentroid.y) * 0.5 * height
+    if (isPointInPolygon(sx, sy, polygon)) {
+      selected.push(t)
+    }
+  }
+  return selected
+}
