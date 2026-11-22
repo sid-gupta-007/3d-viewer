@@ -5,7 +5,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { selectMeshesInRect } from './features/selection/viewportSelection'
 import { cycleMeshHit, pickAllVisibleMeshes } from './features/selection/pickMesh'
-import { extractTrianglesAsPart, selectMeshesInBox, selectTrianglesInBox, sliceMeshWithBox, smoothSpikyMeshEdges } from './features/selection/volumeSelector'
+import { extractTrianglesAsPart, selectMeshesInBox, selectTrianglesInBox, selectTrianglesInScreenPolygon, sliceMeshWithBox, smoothSpikyMeshEdges, type ScreenPoint } from './features/selection/volumeSelector'
 import { splitMeshByConnectedIslands, splitMeshByMaterialGroups } from './features/geometry/splitMesh'
 import { ENVIRONMENT_PRESETS } from './features/environment/environmentPresets'
 import type { EnvironmentPresetId } from './domain/sceneManifest'
@@ -17,7 +17,7 @@ export type SceneNode = { id: string; name: string; type: string; visible: boole
 export type ObjectTransform = { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
 export type ObjectStats = { meshCount: number; vertexCount: number; triangleCount: number; materialCount: number; dimensions: [number, number, number] }
 export type ViewportApi = {
-  loadModel: (file: File, assetKey?: string, resources?: File[], resourcePaths?: string[]) => Promise<SceneNode[]>
+  loadModel: (file: File, assetKey?: string, resources?: File[], resourcePaths?: string[], append?: boolean) => Promise<SceneNode[]>
   clearImported: () => void
   getTransform: (id: string) => ObjectTransform | null
   getTransforms: () => Record<string, ObjectTransform>
@@ -46,6 +46,31 @@ export type ViewportApi = {
   setActivePovCamera?: (id: string | null) => void
   applyVolumePreset?: (preset: 'top' | 'bottom' | 'left' | 'right' | 'center' | 'lastHit') => void
   smoothSelectedMesh?: (id: string) => number
+  deleteSelectedObjects?: (ids: string[]) => SceneNode[] | null
+  deleteBoxSelection?: () => { modifiedSourceIds: string[]; deletedCount: number } | null
+  getAnimationClips?: () => Array<{ name: string; duration: number }>
+  setActiveAnimationClip?: (name: string | null, time?: number) => void
+  setSkeletonVisible?: (visible: boolean) => void
+  setFreeformMode?: (mode: 'off' | 'extract' | 'delete') => void
+  duplicateObject?: (id: string) => SceneNode[] | null
+  snapObjectToGround?: (id: string) => ObjectTransform | null
+  setParentObject?: (childId: string, newParentId: string | null) => SceneNode[] | null
+  setQuickHingePivot?: (id: string, preset: 'top' | 'bottom' | 'left' | 'right' | 'center') => PivotPoint | null
+  alignObjectToTarget?: (sourceId: string, targetId: string) => ObjectTransform | null
+  attachFpsCameraToNode?: (targetId: string) => SceneNode | null
+  setMeshSurfacePreset?: (id: string, preset: 'mirror' | 'glass' | 'default') => boolean
+  stepUniversalInputs?: (
+    keys: Set<string>,
+    toggledKeys: Set<string>,
+    dt: number,
+    bindings: Array<{
+      targetId: string
+      input: string
+      axis: 'x' | 'y' | 'z'
+      action: 'translate' | 'rotate' | 'hinge' | 'spin' | 'cameraPov'
+      speed: number
+    }>
+  ) => void
 }
 type Props = {
   selectedId: string
@@ -66,7 +91,7 @@ type VolumeSelectionState = {
   triangleCount: number
   primaryMeshId: string | null
 }
-type ViewportRuntime = { scene: THREE.Scene; camera: THREE.PerspectiveCamera; renderer: THREE.WebGPURenderer; controls: OrbitControls; objects: Map<string, THREE.Object3D>; nodes: SceneNode[]; initialTransforms: Map<string, ObjectTransform>; asset: { files: File[]; resourcePaths: string[]; assetKey: string } | null; transform: TransformControls; selectionHelper: THREE.Box3Helper; selectionHelpers: Map<string, THREE.Box3Helper>; selectionProxy: THREE.Group; dragStart: { proxyMatrix: THREE.Matrix4; objectMatrices: Map<string, THREE.Matrix4> } | null; wireframeMaterials: Map<THREE.Material, boolean | undefined>; dissolves: ReturnType<typeof createDissolveController>; pivots: ReturnType<typeof createPivotController>; lastHit: { id: string; point: PivotPoint } | null; observer: ResizeObserver; volumeProxy: THREE.Group; volumeBox: THREE.Box3; volumeHelper: THREE.Box3Helper; volumeFillMesh: THREE.Mesh; volumeHighlightMesh: THREE.Mesh; volumeMode: 'translate' | 'scale'; volumeActive: boolean; volumeInitialized: boolean; volumeSelection: VolumeSelectionState }
+type ViewportRuntime = { scene: THREE.Scene; camera: THREE.PerspectiveCamera; renderer: THREE.WebGPURenderer; controls: OrbitControls; objects: Map<string, THREE.Object3D>; nodes: SceneNode[]; initialTransforms: Map<string, ObjectTransform>; asset: { files: File[]; resourcePaths: string[]; assetKey: string } | null; transform: TransformControls; selectionHelper: THREE.Box3Helper; selectionHelpers: Map<string, THREE.Box3Helper>; selectionProxy: THREE.Group; dragStart: { proxyMatrix: THREE.Matrix4; objectMatrices: Map<string, THREE.Matrix4> } | null; wireframeMaterials: Map<THREE.Material, boolean | undefined>; dissolves: ReturnType<typeof createDissolveController>; pivots: ReturnType<typeof createPivotController>; lastHit: { id: string; point: PivotPoint } | null; observer: ResizeObserver; volumeProxy: THREE.Group; volumeBox: THREE.Box3; volumeHelper: THREE.Box3Helper; volumeFillMesh: THREE.Mesh; volumeHighlightMesh: THREE.Mesh; volumeMode: 'translate' | 'scale'; volumeActive: boolean; volumeInitialized: boolean; volumeSelection: VolumeSelectionState; mixer: THREE.AnimationMixer | null; clips: THREE.AnimationClip[]; activeClipName: string | null; skeletonHelper: THREE.SkeletonHelper | null; freeformMode: 'off' | 'extract' | 'delete' }
 
 const tuple = (value: THREE.Vector3): [number, number, number] => [value.x, value.y, value.z]
 const readTransform = (object: THREE.Object3D): ObjectTransform => ({ position: tuple(object.position), rotation: [object.rotation.x, object.rotation.y, object.rotation.z], scale: tuple(object.scale) })
@@ -267,7 +292,7 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
   const runtime = useRef<ViewportRuntime | null>(null)
 
   useImperativeHandle(ref, () => ({
-    async loadModel(file, assetKey, resources = [file], resourcePaths = []) {
+    async loadModel(file, assetKey, resources = [file], resourcePaths = [], append = false) {
       const current = runtime.current
       if (!current) throw new Error('The 3D viewport is still starting')
       const sourceFiles = resources.includes(file) ? resources : [file, ...resources]
@@ -292,18 +317,25 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
         })
         const gltf = await new GLTFLoader(manager).loadAsync(fileUrl)
         const root = gltf.scene
-        const key = assetKey ?? `model-${file.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`
-        resetViewportSelectionAndHelpers(current)
-        current.dissolves.clear()
-        current.pivots.clear()
-        current.scene.children.filter((child) => child.userData.forgeImported).forEach((child) => {
-          current.scene.remove(child)
-          child.traverse((item) => {
-            const id = item.userData.forgeId
-            if (id) current.objects.delete(id)
+        let key = assetKey ?? `model-${file.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`
+        if (append) {
+          let suffix = 1
+          while (current.objects.has(`${key}:root`)) {
+            key = `${assetKey ?? 'model'}-${suffix++}`
+          }
+        } else {
+          resetViewportSelectionAndHelpers(current)
+          current.dissolves.clear()
+          current.pivots.clear()
+          current.scene.children.filter((child) => child.userData.forgeImported).forEach((child) => {
+            current.scene.remove(child)
+            child.traverse((item) => {
+              const id = item.userData.forgeId
+              if (id) current.objects.delete(id)
+            })
+            disposeObjectTree(child)
           })
-          disposeObjectTree(child)
-        })
+        }
         const rootId = `${key}:root`
         root.userData.forgeId = rootId
         root.userData.forgeImported = true
@@ -323,29 +355,52 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
         if (!bounds.isEmpty()) {
           const size = bounds.getSize(new THREE.Vector3())
           const extent = Math.max(size.x, size.y, size.z)
-          if (extent > 0) root.scale.multiplyScalar(2.2 / extent)
+          if (extent > 0) root.scale.multiplyScalar((append ? 1.5 : 2.2) / extent)
           root.updateMatrixWorld(true)
           const normalizedBounds = new THREE.Box3().setFromObject(root)
           const center = normalizedBounds.getCenter(new THREE.Vector3())
           const ground = normalizedBounds.min.y
-          root.position.x -= center.x
+          const existingRoots = current.scene.children.filter((child) => child.userData.forgeImported && child !== root)
+          const offsetX = append ? existingRoots.length * 1.8 : 0
+          root.position.x -= center.x - offsetX
           root.position.y -= ground
           root.position.z -= center.z
           root.updateMatrixWorld(true)
-          const framedBounds = new THREE.Box3().setFromObject(root)
-          const framedSize = framedBounds.getSize(new THREE.Vector3())
-          const target = framedBounds.getCenter(new THREE.Vector3())
-          current.controls.target.copy(target)
-          const radius = Math.max(framedSize.length() * 0.5, 0.5)
-          const distance = radius / Math.sin(THREE.MathUtils.degToRad(current.camera.fov * 0.5)) * 1.2
-          const direction = current.camera.position.clone().sub(current.controls.target).normalize()
-          current.camera.position.copy(target).addScaledVector(direction, distance)
-          current.controls.update()
+          if (!append) {
+            const framedBounds = new THREE.Box3().setFromObject(root)
+            const framedSize = framedBounds.getSize(new THREE.Vector3())
+            const target = framedBounds.getCenter(new THREE.Vector3())
+            current.controls.target.copy(target)
+            const radius = Math.max(framedSize.length() * 0.5, 0.5)
+            const distance = radius / Math.sin(THREE.MathUtils.degToRad(current.camera.fov * 0.5)) * 1.2
+            const direction = current.camera.position.clone().sub(current.controls.target).normalize()
+            current.camera.position.copy(target).addScaledVector(direction, distance)
+            current.controls.update()
+          }
         }
-        current.initialTransforms.clear()
+        if (!append) current.initialTransforms.clear()
         for (const [id, object] of current.objects) if (object.userData.forgeImported || object.userData.forgeId?.startsWith(`${key}:`)) current.initialTransforms.set(id, readTransform(object))
-        current.asset = { files: sourceFiles, resourcePaths: sourceFiles.map((resource, index) => resourcePaths[index] || resource.webkitRelativePath || resource.name), assetKey: key }
-        current.nodes = nodes
+        if (!append) {
+          current.asset = { files: sourceFiles, resourcePaths: sourceFiles.map((resource, index) => resourcePaths[index] || resource.webkitRelativePath || resource.name), assetKey: key }
+        }
+        current.nodes = append ? [...current.nodes, ...nodes] : nodes
+        if (current.skeletonHelper) {
+          current.scene.remove(current.skeletonHelper)
+          current.skeletonHelper.dispose()
+          current.skeletonHelper = null
+        }
+        const hasBones = nodes.some((n) => n.type === 'Bone')
+        if (hasBones) {
+          const skelHelper = new THREE.SkeletonHelper(root)
+          skelHelper.visible = false
+          skelHelper.userData.forgeEditorHelper = true
+          current.scene.add(skelHelper)
+          current.skeletonHelper = skelHelper
+        }
+        current.mixer?.stopAllAction()
+        current.mixer = gltf.animations?.length ? new THREE.AnimationMixer(root) : null
+        current.clips = gltf.animations ?? []
+        current.activeClipName = null
         if (current.volumeActive) {
           initVolumeBounds(current, selectedIdRef.current)
           current.volumeHelper.visible = true
@@ -879,6 +934,393 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
       }
       return totalSmoothed
     },
+    deleteSelectedObjects(ids) {
+      const current = runtime.current
+      if (!current || !ids.length) return null
+      const toDelete = new Set<string>(ids)
+      let added = true
+      while (added) {
+        added = false
+        for (const n of current.nodes) {
+          if (n.parent && toDelete.has(n.parent) && !toDelete.has(n.id)) {
+            toDelete.add(n.id)
+            added = true
+          }
+        }
+      }
+      for (const id of toDelete) {
+        if (id === 'lights' || id.endsWith(':root')) continue
+        const obj = current.objects.get(id)
+        if (obj) {
+          if (current.transform.object === obj) current.transform.detach()
+          obj.parent?.remove(obj)
+          current.objects.delete(id)
+        }
+      }
+      current.nodes = current.nodes.filter((n) => n.id.endsWith(':root') || !toDelete.has(n.id))
+      onNodesChange(current.nodes)
+      onSelectMany([], false)
+      return current.nodes
+    },
+    deleteBoxSelection() {
+      const current = runtime.current
+      if (!current) return null
+      syncVolumeVisuals(current)
+      current.scene.updateMatrixWorld(true)
+      const meshIds = selectMeshesInBox(current.objects, current.volumeBox)
+      const modifiedSourceIds: string[] = []
+      let deletedCount = 0
+
+      for (const sourceId of meshIds) {
+        const sourceObj = current.objects.get(sourceId) as THREE.Mesh | undefined
+        if (!sourceObj?.isMesh) continue
+        let triIndices = selectTrianglesInBox(sourceObj, current.volumeBox, 'centroid')
+        if (triIndices.length === 0) {
+          triIndices = selectTrianglesInBox(sourceObj, current.volumeBox, 'intersects')
+        }
+        if (triIndices.length === 0) continue
+
+        const sliced =
+          sliceMeshWithBox(sourceObj, current.volumeBox) ??
+          extractTrianglesAsPart(sourceObj, triIndices)
+        if (!sliced) continue
+
+        sourceObj.geometry = sliced.remainingGeometry
+        sliced.part.geometry.dispose()
+        if (sliced.remainingCount === 0) {
+          sourceObj.visible = false
+        }
+        modifiedSourceIds.push(sourceId)
+        deletedCount += sliced.removedCount
+      }
+
+      if (deletedCount === 0) return null
+      refreshVolumeSelection(current, selectedIdRef.current, true)
+      return { modifiedSourceIds, deletedCount }
+    },
+    getAnimationClips() {
+      const current = runtime.current
+      if (!current) return []
+      return current.clips.map((c) => ({ name: c.name || 'Clip', duration: Number(c.duration.toFixed(2)) }))
+    },
+    setActiveAnimationClip(name, time = 0) {
+      const current = runtime.current
+      if (!current || !current.mixer) return
+      current.mixer.stopAllAction()
+      current.activeClipName = name
+      if (!name) return
+      const clip = current.clips.find((c) => (c.name || 'Clip') === name)
+      if (!clip) return
+      const action = current.mixer.clipAction(clip)
+      action.reset().play()
+      current.mixer.setTime(time)
+    },
+    setSkeletonVisible(visible) {
+      const current = runtime.current
+      if (!current?.skeletonHelper) return
+      current.skeletonHelper.visible = visible
+    },
+    setFreeformMode(mode) {
+      const current = runtime.current
+      if (!current) return
+      current.freeformMode = mode
+    },
+    duplicateObject(id) {
+      const current = runtime.current
+      const source = current?.objects.get(id)
+      if (!current || !source) return null
+      let idx = 1
+      while (current.objects.has(`${id}:copy-${idx}`)) idx++
+      const cloneRootId = `${id}:copy-${idx}`
+
+      source.updateWorldMatrix(true, true)
+      const sourceBounds = new THREE.Box3().setFromObject(source)
+      const worldSize = sourceBounds.isEmpty() ? new THREE.Vector3(1, 1, 1) : sourceBounds.getSize(new THREE.Vector3())
+      const worldOffset = Math.max(0.75, worldSize.x * 1.25)
+
+      let cloned: THREE.Object3D
+      if ((source as THREE.SkinnedMesh).isSkinnedMesh) {
+        const skinned = source as THREE.SkinnedMesh
+        if (skinned.skeleton) skinned.skeleton.update()
+        const bakedGeo = skinned.geometry.clone()
+        const posAttr = bakedGeo.getAttribute('position')
+        if (posAttr) {
+          const v = new THREE.Vector3()
+          for (let i = 0; i < posAttr.count; i++) {
+            v.fromBufferAttribute(posAttr, i)
+            if (typeof skinned.applyBoneTransform === 'function' && skinned.skeleton) {
+              try { skinned.applyBoneTransform(i, v) } catch { /* ignore */ }
+            }
+            posAttr.setXYZ(i, v.x, v.y, v.z)
+          }
+          posAttr.needsUpdate = true
+          bakedGeo.computeBoundingBox()
+          bakedGeo.computeBoundingSphere()
+        }
+        const mat = Array.isArray(skinned.material) ? skinned.material.map((m) => m.clone()) : skinned.material.clone()
+        cloned = new THREE.Mesh(bakedGeo, mat)
+        cloned.position.copy(skinned.position)
+        cloned.rotation.copy(skinned.rotation)
+        cloned.quaternion.copy(skinned.quaternion)
+        cloned.scale.copy(skinned.scale)
+      } else {
+        cloned = source.clone(true)
+      }
+      cloned.name = `${source.name || 'Object'}_copy_${idx}`
+
+      const parent = source.parent ?? current.scene
+      parent.add(cloned)
+      parent.updateWorldMatrix(true, false)
+      const worldPos = source.getWorldPosition(new THREE.Vector3())
+      worldPos.x += worldOffset
+      if (parent !== current.scene) {
+        parent.worldToLocal(worldPos)
+      }
+      cloned.position.copy(worldPos)
+      cloned.updateMatrixWorld(true)
+
+      const newNodes: SceneNode[] = []
+      const sourceNode = current.nodes.find((n) => n.id === id)
+      const registerClone = (obj: THREE.Object3D, forgeId: string, parentId: string | null) => {
+        obj.userData = { ...obj.userData, forgeId }
+        const mesh = obj as THREE.Mesh
+        if (mesh.isMesh && mesh.geometry && obj !== cloned) {
+          mesh.geometry = mesh.geometry.clone()
+        }
+        current.objects.set(forgeId, obj)
+        current.initialTransforms.set(forgeId, readTransform(obj))
+        newNodes.push({
+          id: forgeId,
+          name: obj.name || obj.type,
+          type: mesh.isMesh ? 'Mesh' : obj.type,
+          visible: obj.visible,
+          parent: parentId,
+        })
+        obj.children.forEach((child, childIdx) => {
+          registerClone(child, `${forgeId}.${childIdx}`, forgeId)
+        })
+      }
+
+      registerClone(cloned, cloneRootId, sourceNode?.parent ?? null)
+      current.nodes = [...current.nodes, ...newNodes]
+      onNodesChange(current.nodes)
+      onSelectMany([cloneRootId], false)
+      return current.nodes
+    },
+    snapObjectToGround(id) {
+      const current = runtime.current
+      const obj = current?.objects.get(id)
+      if (!current || !obj) return null
+      obj.updateWorldMatrix(true, true)
+      const bounds = new THREE.Box3().setFromObject(obj)
+      if (bounds.isEmpty()) return null
+      const deltaY = -bounds.min.y
+      if (obj.parent && obj.parent !== current.scene) {
+        const worldPos = new THREE.Vector3()
+        obj.getWorldPosition(worldPos)
+        worldPos.y += deltaY
+        obj.parent.worldToLocal(worldPos)
+        obj.position.copy(worldPos)
+      } else {
+        obj.position.y += deltaY
+      }
+      obj.updateMatrixWorld(true)
+      return readTransform(obj)
+    },
+    setParentObject(childId, newParentId) {
+      const current = runtime.current
+      const childObj = current?.objects.get(childId)
+      if (!current || !childObj || childId === newParentId) return null
+      const targetParent = newParentId ? current.objects.get(newParentId) : current.scene
+      if (!targetParent) return null
+      // Prevent circular parenting
+      let cursor: THREE.Object3D | null = targetParent
+      while (cursor) {
+        if (cursor === childObj) return null
+        cursor = cursor.parent
+      }
+      targetParent.attach(childObj)
+      childObj.updateMatrixWorld(true)
+      current.nodes = current.nodes.map((n) => (n.id === childId ? { ...n, parent: newParentId } : n))
+      onNodesChange(current.nodes)
+      return current.nodes
+    },
+    setQuickHingePivot(id, preset) {
+      const current = runtime.current
+      const obj = current?.objects.get(id) as THREE.Mesh | undefined
+      if (!current || !obj?.isMesh || !obj.geometry) return null
+      if (preset === 'center') {
+        current.pivots.apply(id, obj, [0, 0, 0], true)
+        return [0, 0, 0]
+      }
+      // First reset pivot to geometry center so bounds are measured cleanly
+      current.pivots.apply(id, obj, [0, 0, 0], true)
+      obj.geometry.computeBoundingBox()
+      const bb = obj.geometry.boundingBox
+      if (!bb) return null
+      const c = bb.getCenter(new THREE.Vector3())
+      let pivot: PivotPoint = [c.x, c.y, c.z]
+      if (preset === 'top') pivot = [c.x, bb.max.y, c.z]
+      else if (preset === 'bottom') pivot = [c.x, bb.min.y, c.z]
+      else if (preset === 'left') pivot = [bb.min.x, c.y, c.z]
+      else if (preset === 'right') pivot = [bb.max.x, c.y, c.z]
+      if (!current.pivots.apply(id, obj, pivot, true)) return null
+      return pivot
+    },
+    alignObjectToTarget(sourceId, targetId) {
+      const current = runtime.current
+      const sourceObj = current?.objects.get(sourceId)
+      const targetObj = current?.objects.get(targetId)
+      if (!current || !sourceObj || !targetObj || sourceId === targetId) return null
+      targetObj.updateWorldMatrix(true, true)
+      const targetBounds = new THREE.Box3().setFromObject(targetObj)
+      const worldCenter = targetBounds.isEmpty()
+        ? targetObj.getWorldPosition(new THREE.Vector3())
+        : targetBounds.getCenter(new THREE.Vector3())
+      if (sourceObj.parent && sourceObj.parent !== current.scene) {
+        sourceObj.parent.updateWorldMatrix(true, false)
+        sourceObj.parent.worldToLocal(worldCenter)
+      }
+      sourceObj.position.copy(worldCenter)
+      sourceObj.updateMatrixWorld(true)
+      return readTransform(sourceObj)
+    },
+    attachFpsCameraToNode(targetId) {
+      const current = runtime.current
+      const targetObj = current?.objects.get(targetId)
+      if (!current || !targetObj) return null
+      let idx = 1
+      while (current.objects.has(`camera:fps-${idx}`)) idx++
+      const camId = `camera:fps-${idx}`
+      const camName = `FPS_POV_${idx}`
+
+      const camGroup = new THREE.Group()
+      camGroup.name = camName
+      camGroup.userData.forgeId = camId
+      camGroup.userData.forgeCamera = true
+
+      targetObj.updateWorldMatrix(true, true)
+      const bounds = new THREE.Box3().setFromObject(targetObj)
+      const size = bounds.isEmpty() ? new THREE.Vector3(0.4, 0.4, 0.4) : bounds.getSize(new THREE.Vector3())
+      camGroup.position.set(0, Math.max(0.15, size.y * 0.45), 0.12)
+
+      const bodyGeo = new THREE.BoxGeometry(0.18, 0.12, 0.22)
+      const lensGeo = new THREE.ConeGeometry(0.1, 0.16, 4)
+      lensGeo.rotateX(Math.PI / 2)
+      lensGeo.translate(0, 0, -0.18)
+      const camMat = new THREE.MeshBasicMaterial({ color: '#78a6ff', wireframe: true })
+      const bodyMesh = new THREE.Mesh(bodyGeo, camMat)
+      const lensMesh = new THREE.Mesh(lensGeo, camMat)
+      bodyMesh.userData.forgeId = camId
+      lensMesh.userData.forgeId = camId
+      camGroup.add(bodyMesh, lensMesh)
+
+      targetObj.add(camGroup)
+      camGroup.updateMatrixWorld(true)
+      current.objects.set(camId, camGroup)
+      current.initialTransforms.set(camId, readTransform(camGroup))
+      const newNode: SceneNode = { id: camId, name: camName, type: 'Camera', visible: true, parent: targetId }
+      current.nodes = [...current.nodes, newNode]
+      onNodesChange(current.nodes)
+
+      const worldPos = new THREE.Vector3()
+      const worldQuat = new THREE.Quaternion()
+      camGroup.getWorldPosition(worldPos)
+      camGroup.getWorldQuaternion(worldQuat)
+      current.camera.position.copy(worldPos)
+      const forward = new THREE.Vector3(0, 0, -4).applyQuaternion(worldQuat)
+      current.controls.target.copy(worldPos).add(forward)
+      current.controls.update()
+      onSelectMany([camId], false)
+      return newNode
+    },
+    setMeshSurfacePreset(id, preset) {
+      const current = runtime.current
+      const obj = current?.objects.get(id) as THREE.Mesh | undefined
+      if (!current || !obj?.isMesh || !obj.material) return false
+      const applyToMat = (mat: THREE.Material) => {
+        const m = mat.clone() as THREE.MeshStandardMaterial
+        if (preset === 'mirror') {
+          if ('metalness' in m) m.metalness = 1.0
+          if ('roughness' in m) m.roughness = 0.02
+          m.transparent = false
+          m.opacity = 1.0
+        } else if (preset === 'glass') {
+          if ('metalness' in m) m.metalness = 0.1
+          if ('roughness' in m) m.roughness = 0.08
+          m.transparent = true
+          m.opacity = 0.36
+        } else {
+          if ('metalness' in m) m.metalness = 0.2
+          if ('roughness' in m) m.roughness = 0.65
+          m.transparent = false
+          m.opacity = 1.0
+        }
+        m.needsUpdate = true
+        return m
+      }
+      obj.material = Array.isArray(obj.material) ? obj.material.map(applyToMat) : applyToMat(obj.material)
+      return true
+    },
+    stepUniversalInputs(keys, toggledKeys, dt, bindings) {
+      const current = runtime.current
+      if (!current) return
+      const gamepads = typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function' ? navigator.getGamepads() : []
+      const activePad = Array.from(gamepads ?? []).find((gp): gp is Gamepad => Boolean(gp && gp.connected)) ?? null
+      const deadzone = (val: number) => (Math.abs(val) < 0.08 ? 0 : val)
+
+      const readInputSignal = (input: string): { analog: number; active: boolean; toggled: boolean } => {
+        const code = input.toLowerCase()
+        if (code.startsWith('gp:axis:')) {
+          const axisIdx = Number(code.replace('gp:axis:', ''))
+          const raw = activePad && activePad.axes[axisIdx] !== undefined ? deadzone(activePad.axes[axisIdx]) : 0
+          return { analog: raw, active: Math.abs(raw) > 0, toggled: raw > 0.5 }
+        }
+        if (code.startsWith('gp:btn:')) {
+          const btnIdx = Number(code.replace('gp:btn:', ''))
+          const btn = activePad?.buttons[btnIdx]
+          const val = btn ? btn.value : 0
+          return { analog: val, active: Boolean(btn?.pressed || val > 0.1), toggled: Boolean(btn?.pressed) }
+        }
+        const held = keys.has(code)
+        const toggled = toggledKeys.has(code)
+        return { analog: held ? 1 : 0, active: held, toggled }
+      }
+
+      for (const b of bindings) {
+        const obj = current.objects.get(b.targetId)
+        if (!obj) continue
+        const signal = readInputSignal(b.input)
+        const spd = b.speed || 1
+        const ax = b.axis || 'y'
+
+        if (b.action === 'translate' && signal.active) {
+          const dir = new THREE.Vector3(ax === 'x' ? 1 : 0, ax === 'y' ? 1 : 0, ax === 'z' ? 1 : 0).applyQuaternion(obj.quaternion)
+          obj.position.addScaledVector(dir, 2.5 * spd * signal.analog * dt)
+          obj.updateMatrixWorld(true)
+        } else if (b.action === 'rotate' && signal.active) {
+          obj.rotation[ax] += 2.0 * spd * signal.analog * dt
+          obj.updateMatrixWorld(true)
+        } else if (b.action === 'spin' && signal.active) {
+          obj.rotation[ax] += 4.5 * spd * signal.analog * dt
+          obj.updateMatrixWorld(true)
+        } else if (b.action === 'hinge') {
+          const axisIndex = ax === 'x' ? 0 : ax === 'y' ? 1 : 2
+          const baseRot = current.initialTransforms.get(b.targetId)?.rotation[axisIndex] ?? 0
+          const targetRot = signal.toggled ? baseRot + Math.PI * 0.45 * spd : baseRot
+          obj.rotation[ax] += (targetRot - obj.rotation[ax]) * Math.min(1, dt * 8)
+          obj.updateMatrixWorld(true)
+        } else if (b.action === 'cameraPov' && signal.toggled) {
+          obj.updateWorldMatrix(true, false)
+          const worldPos = obj.getWorldPosition(new THREE.Vector3())
+          const worldQuat = obj.getWorldQuaternion(new THREE.Quaternion())
+          current.camera.position.copy(worldPos)
+          const forward = new THREE.Vector3(0, 0, -4).applyQuaternion(worldQuat)
+          current.controls.target.copy(worldPos).add(forward)
+          current.controls.update()
+        }
+      }
+    },
   }), [onNodesChange, onSelectMany])
 
   useEffect(() => {
@@ -1135,6 +1577,101 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
     element.addEventListener('pointerup', endBoxSelect)
     element.addEventListener('pointercancel', endBoxSelect)
 
+    const lassoSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    lassoSvg.setAttribute('class', 'lasso-overlay')
+    const lassoPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon')
+    lassoPoly.setAttribute('fill', 'rgba(183, 243, 107, 0.16)')
+    lassoPoly.setAttribute('stroke', '#b7f36b')
+    lassoPoly.setAttribute('stroke-width', '1.5')
+    lassoPoly.setAttribute('stroke-dasharray', '4 3')
+    lassoSvg.appendChild(lassoPoly)
+    lassoSvg.style.display = 'none'
+    element.appendChild(lassoSvg)
+
+    let lassoGesture: { pointerId: number; points: ScreenPoint[]; mode: 'extract' | 'delete' } | null = null
+    const startLasso = (event: PointerEvent) => {
+      const current = runtime.current
+      if (!current || current.freeformMode === 'off' || event.button !== 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      const rect = element.getBoundingClientRect()
+      const pt = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+      lassoGesture = { pointerId: event.pointerId, points: [pt], mode: current.freeformMode }
+      element.setPointerCapture(event.pointerId)
+      current.controls.enabled = false
+      lassoPoly.setAttribute('stroke', current.freeformMode === 'delete' ? '#f37b7b' : '#b7f36b')
+      lassoPoly.setAttribute('fill', current.freeformMode === 'delete' ? 'rgba(243, 123, 123, 0.18)' : 'rgba(183, 243, 107, 0.16)')
+      lassoPoly.setAttribute('points', `${pt.x},${pt.y}`)
+      lassoSvg.style.display = 'block'
+    }
+    const moveLasso = (event: PointerEvent) => {
+      if (!lassoGesture || event.pointerId !== lassoGesture.pointerId) return
+      const rect = element.getBoundingClientRect()
+      const pt = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+      const last = lassoGesture.points[lassoGesture.points.length - 1]
+      if (!last || Math.hypot(pt.x - last.x, pt.y - last.y) >= 4) {
+        lassoGesture.points.push(pt)
+        lassoPoly.setAttribute('points', lassoGesture.points.map((p) => `${p.x},${p.y}`).join(' '))
+      }
+    }
+    const endLasso = (event: PointerEvent) => {
+      if (!lassoGesture || event.pointerId !== lassoGesture.pointerId) return
+      const gesture = lassoGesture
+      lassoGesture = null
+      lassoSvg.style.display = 'none'
+      lassoPoly.setAttribute('points', '')
+      if (element.hasPointerCapture?.(event.pointerId)) element.releasePointerCapture(event.pointerId)
+      const current = runtime.current
+      if (!current) return
+      current.controls.enabled = activeToolRef.current === 'select' || Boolean(current.volumeActive)
+      if (gesture.points.length < 3) return
+      const canvasRect = getCanvasRect()
+      current.scene.updateMatrixWorld(true)
+      camera.updateMatrixWorld(true)
+      const targetMeshes = selectedIdRef.current && (current.objects.get(selectedIdRef.current) as THREE.Mesh | undefined)?.isMesh
+        ? [[selectedIdRef.current, current.objects.get(selectedIdRef.current) as THREE.Mesh] as const]
+        : [...current.objects.entries()].filter(([, obj]) => (obj as THREE.Mesh).isMesh && !obj.userData.forgeEditorHelper) as Array<[string, THREE.Mesh]>
+
+      const newNodes: SceneNode[] = []
+      const extractedIds: string[] = []
+      for (const [sourceId, sourceObj] of targetMeshes) {
+        const tris = selectTrianglesInScreenPolygon(sourceObj, camera, canvasRect.width, canvasRect.height, gesture.points)
+        if (!tris.length) continue
+        let idx = 1
+        while (current.objects.has(`${sourceId}:lasso-${idx}`)) idx++
+        const partId = `${sourceId}:lasso-${idx}`
+        const res = extractTrianglesAsPart(sourceObj, tris, {
+          name: `${sourceObj.name || 'Part'}_lasso_${idx}`,
+          forgeId: partId,
+        })
+        if (!res) continue
+        sourceObj.geometry = res.remainingGeometry
+        if (res.remainingCount === 0) sourceObj.visible = false
+        if (gesture.mode === 'extract') {
+          const parent = sourceObj.parent ?? current.scene
+          parent.add(res.part)
+          current.objects.set(partId, res.part)
+          current.initialTransforms.set(partId, readTransform(res.part))
+          const sourceNode = current.nodes.find((n) => n.id === sourceId)
+          newNodes.push({ id: partId, name: res.part.name, type: 'Mesh', visible: true, parent: sourceNode?.parent ?? null })
+          extractedIds.push(partId)
+        } else {
+          res.part.geometry.dispose()
+        }
+      }
+      if (newNodes.length) {
+        current.nodes = [...current.nodes, ...newNodes]
+        onNodesChange(current.nodes)
+        onSelectMany(extractedIds, false)
+      }
+      current.freeformMode = 'off'
+      onTransformCommit?.()
+    }
+    element.addEventListener('pointerdown', startLasso, true)
+    element.addEventListener('pointermove', moveLasso)
+    element.addEventListener('pointerup', endLasso)
+    element.addEventListener('pointercancel', endLasso)
+
     void (async () => {
       try {
         renderer = new THREE.WebGPURenderer({ antialias: true, alpha: false })
@@ -1261,6 +1798,11 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
           volumeActive: false,
           volumeInitialized: false,
           volumeSelection: { meshIds: [], trianglesByMesh: new Map(), triangleCount: 0, primaryMeshId: null },
+          mixer: null,
+          clips: [],
+          activeClipName: null,
+          skeletonHelper: null,
+          freeformMode: 'off',
         }
         const initialSelection = objects.get(selectedId)
         if (initialSelection) onTransformChange(readTransform(initialSelection))
@@ -1304,7 +1846,12 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
       element.removeEventListener('pointermove', moveBoxSelect)
       element.removeEventListener('pointerup', endBoxSelect)
       element.removeEventListener('pointercancel', endBoxSelect)
+      element.removeEventListener('pointerdown', startLasso, true)
+      element.removeEventListener('pointermove', moveLasso)
+      element.removeEventListener('pointerup', endLasso)
+      element.removeEventListener('pointercancel', endLasso)
       marquee.remove()
+      lassoSvg.remove()
       resizeObserver?.disconnect()
       if (renderer && rendererInitialized) {
         renderer.setAnimationLoop(null)

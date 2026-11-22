@@ -1,0 +1,240 @@
+{
+  "version": 1,
+  "projectName": "CarRacingGame",
+  "assetPath": "./assets/car-and-driver.gltf",
+  "camera": {
+    "position": [
+      -3.2,
+      1.8,
+      4.5
+    ],
+    "target": [
+      0,
+      0.8,
+      0
+    ],
+    "fov": 38,
+    "near": 0.1,
+    "far": 100
+  },
+  "environment": {
+    "preset": "sunset",
+    "background": "#111317",
+    "fog": {
+      "color": "#111317",
+      "near": 12,
+      "far": 32
+    },
+    "exposure": 1,
+    "xrEnabled": false,
+    "lights": [
+      {
+        "id": "hemi",
+        "type": "hemisphere",
+        "color": "#dce9ff",
+        "groundColor": "#242a3b",
+        "intensity": 2.1
+      },
+      {
+        "id": "key",
+        "type": "directional",
+        "color": "#fff0d9",
+        "intensity": 3.5,
+        "position": [
+          4,
+          8,
+          5
+        ]
+      },
+      {
+        "id": "rim",
+        "type": "directional",
+        "color": "#617eff",
+        "intensity": 2.7,
+        "position": [
+          -5,
+          3,
+          -4
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "forgeId": "car:root",
+      "name": "Racing_Car",
+      "parentId": null,
+      "type": "Group",
+      "visible": true,
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "forgeId": "car:door",
+      "name": "Car_Door_Left",
+      "parentId": "car:root",
+      "type": "Mesh",
+      "visible": true,
+      "position": [
+        -0.78,
+        0.48,
+        0.4
+      ],
+      "rotation": [
+        0,
+        1.22,
+        0
+      ],
+      "scale": [
+        0.1,
+        0.42,
+        1.05
+      ],
+      "pivot": [
+        0,
+        0,
+        -0.52
+      ]
+    },
+    {
+      "forgeId": "car:steer",
+      "name": "Steering_Wheel",
+      "parentId": "car:root",
+      "type": "Mesh",
+      "visible": true,
+      "position": [
+        -0.36,
+        0.68,
+        0.35
+      ],
+      "rotation": [
+        0,
+        0,
+        0.65
+      ],
+      "scale": [
+        0.3,
+        0.3,
+        0.06
+      ]
+    },
+    {
+      "forgeId": "person:root",
+      "name": "Driver_Person",
+      "parentId": "car:root",
+      "type": "Group",
+      "visible": true,
+      "position": [
+        -0.36,
+        -0.18,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        0.82,
+        1
+      ]
+    }
+  ],
+  "keyframes": [
+    {
+      "id": "kf-door-0",
+      "targetId": "car:door",
+      "time": 0,
+      "position": [
+        -0.78,
+        0.48,
+        0.4
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.1,
+        0.42,
+        1.05
+      ]
+    },
+    {
+      "id": "kf-door-1",
+      "targetId": "car:door",
+      "time": 1,
+      "position": [
+        -0.78,
+        0.48,
+        0.4
+      ],
+      "rotation": [
+        0,
+        1.22,
+        0
+      ],
+      "scale": [
+        0.1,
+        0.42,
+        1.05
+      ]
+    },
+    {
+      "id": "kf-drive-0",
+      "targetId": "car:root",
+      "time": 1.5,
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "kf-drive-1",
+      "targetId": "car:root",
+      "time": 3.5,
+      "position": [
+        1.4,
+        0,
+        8.5
+      ],
+      "rotation": [
+        -0.04,
+        0.25,
+        0.05
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "loopMode": "loop"
+}
