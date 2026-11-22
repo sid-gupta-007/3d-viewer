@@ -271,6 +271,19 @@ function App() {
   const [newBindAction, setNewBindAction] = useState<'translate' | 'rotate' | 'hinge' | 'spin' | 'cameraPov' | 'playTimeline'>('translate')
   const [newBindSpeed, setNewBindSpeed] = useState(1)
   const [connectedGamepad, setConnectedGamepad] = useState('')
+  const [inspectorTab, setInspectorTab] = useState<'all' | 'object' | 'geometry' | 'motion'>('all')
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set())
+  const [hoverInfo, setHoverInfo] = useState<{ title: string; detail: string; x: number; y: number; deep: boolean } | null>(null)
+  const hoverTimerRef = useRef<number>(0)
+  const deepHoverTimerRef = useRef<number>(0)
+  const toggleSection = (secId: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(secId)) next.delete(secId)
+      else next.add(secId)
+      return next
+    })
+  }
   const gameKeysRef = useRef(new Set<string>())
   const toggledKeysRef = useRef(new Set<string>())
   const liveFileHandleRef = useRef<{ name?: string; getFile?: () => Promise<File>; createWritable?: () => Promise<{ write: (data: string) => Promise<void>; close: () => Promise<void> }> } | null>(null)
@@ -318,9 +331,19 @@ function App() {
     let parent = nodesById.get(id)?.parent
     while (parent && !matchingNodeIds.has(parent)) { matchingNodeIds.add(parent); parent = nodesById.get(parent)?.parent ?? null }
   }
-  const visibleNodes = nodes.filter((node) => matchingNodeIds.has(node.id))
+  const visibleNodes = useMemo(() => nodes.filter((node) => matchingNodeIds.has(node.id)), [nodes, matchingNodeIds])
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string | null, SceneNode[]>()
+    for (const node of visibleNodes) {
+      const p = node.parent && nodes.some((n) => n.id === node.parent) ? node.parent : null
+      const list = map.get(p)
+      if (list) list.push(node)
+      else map.set(p, [node])
+    }
+    return map
+  }, [visibleNodes, nodes])
   const renderTreeNode = (node: SceneNode, depth = 0): ReactNode => {
-    const children = visibleNodes.filter((item) => item.parent === node.id)
+    const children = childrenByParent.get(node.id) ?? []
     const collapsed = collapsedNodes.has(node.id)
     return <div key={node.id}>
       <div ref={(element) => { if (element) nodeRowRefs.current.set(node.id, element); else nodeRowRefs.current.delete(node.id) }} className={`tree-row ${depth ? 'child' : ''} ${selectedIds.includes(node.id) ? 'selected' : ''}`} style={{ paddingLeft: 7 + depth * 14 }} onClick={(event) => selectNode(node.id, event.shiftKey || event.ctrlKey || event.metaKey)}>
@@ -339,6 +362,63 @@ function App() {
   }, [])
 
   useEffect(() => { folderInput.current?.setAttribute('webkitdirectory', '') }, [])
+
+  useEffect(() => {
+    const HELP_GUIDE: Record<string, string> = {
+      'Undo (Ctrl+Z)': 'Reverts the last transform, mesh slice, pivot adjustment, or keyframe edit. Shortcut: Ctrl+Z.',
+      'Redo (Ctrl+Y)': 'Restores the most recently undone action. Shortcut: Ctrl+Y or Ctrl+Shift+Z.',
+      'Add selected object, camera, and keybindings into your code': 'Opens the live React Three Fiber (.tsx) code generator with your current camera pose, split parts, and controller bindings.',
+      'Live sync scene, camera, and cuts directly to your .tsx/.js/.json code file': 'Links a local .tsx, .js, or .json file on disk so every 3D edit automatically updates your code in real time.',
+      'Select': 'Click any 3D part in the viewport to select it. Hold Alt+Click to cycle through inner/overlapping meshes.',
+      'Move': 'Displays 3D X/Y/Z translation arrows to move the selected object or bone across the scene.',
+      'Rotate': 'Displays 3D X/Y/Z rotation rings to rotate or pose the selected part around its pivot point.',
+      'Scale': 'Displays 3D X/Y/Z scale handles to resize the selected object.',
+      '3D Box Volume Selector': 'Places an interactive 3D cutting box in the scene. Move or resize the box over any region, then click Extract Part or Erase Box Region.',
+      '2D Marquee Select (or Alt+Drag)': 'Drag a 2D rectangle on screen to select multiple parts at once. Drag left-to-right for enclosed parts, or right-to-left for crossing parts.',
+      'Draw a freehand 2D lasso loop on screen to cut & extract an irregular part': 'Freeform Lasso Cut: draw any custom shape directly over a model to slice those triangles into a separate movable part.',
+      'Draw a freehand 2D lasso loop on screen to erase unwanted geometry': 'Freeform Lasso Erase: draw a loop around any unwanted area of a 3D map or model to delete those triangles immediately.',
+    }
+    const onPointerOver = (e: MouseEvent) => {
+      const target = (e.target as HTMLElement | null)?.closest?.('[title],[data-help]') as HTMLElement | null
+      window.clearTimeout(hoverTimerRef.current)
+      window.clearTimeout(deepHoverTimerRef.current)
+      if (!target) {
+        setHoverInfo(null)
+        return
+      }
+      const rawTitle = target.getAttribute('data-help-title') || target.getAttribute('aria-label') || target.getAttribute('title') || target.textContent?.trim() || 'Tool Info'
+      const detail = target.getAttribute('data-help') || HELP_GUIDE[target.getAttribute('title') || ''] || target.getAttribute('title') || ''
+      if (!detail) return
+      const rect = target.getBoundingClientRect()
+      const x = Math.min(window.innerWidth - 285, Math.max(12, rect.left))
+      const y = rect.bottom + 90 > window.innerHeight ? Math.max(12, rect.top - 95) : rect.bottom + 8
+      hoverTimerRef.current = window.setTimeout(() => {
+        setHoverInfo({ title: rawTitle, detail, x, y, deep: false })
+      }, 650)
+      deepHoverTimerRef.current = window.setTimeout(() => {
+        setHoverInfo({
+          title: rawTitle,
+          detail: `${detail} · Tip: Use the modular Inspector tabs on the right to isolate Transform, Geometry Slicing, or Motion & Controller setup, and press Ctrl+Z anytime to undo.`,
+          x,
+          y,
+          deep: true,
+        })
+      }, 4500)
+    }
+    const onPointerDown = () => {
+      window.clearTimeout(hoverTimerRef.current)
+      window.clearTimeout(deepHoverTimerRef.current)
+      setHoverInfo(null)
+    }
+    window.addEventListener('mouseover', onPointerOver)
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      window.removeEventListener('mouseover', onPointerOver)
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.clearTimeout(hoverTimerRef.current)
+      window.clearTimeout(deepHoverTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!selected) { setObjectStats(null); return }
@@ -383,8 +463,8 @@ function App() {
     return () => { cancelled = true; window.cancelAnimationFrame(frame) }
   }, [])
 
-  const commitHistorySnapshot = useCallback((overrideNodes?: SceneNode[], overrideFrames?: Keyframe[]) => {
-    const snap = viewport.current?.captureSceneSnapshot?.()
+  const commitHistorySnapshot = useCallback((overrideNodes?: SceneNode[], overrideFrames?: Keyframe[], includeGeometry = false) => {
+    const snap = viewport.current?.captureSceneSnapshot?.(includeGeometry)
     if (!snap) return
     pushState({
       nodes: overrideNodes ?? snap.nodes,
@@ -695,8 +775,19 @@ function App() {
         setActiveClip('')
         setSkeletonVisibleState(false)
       }
-      const newlySelected = imported[imported.length - 1]?.id ?? imported[0]?.id
+      const newlySelected = append ? (imported[imported.length - 1]?.id ?? imported[0]?.id) : (imported[0]?.id ?? '')
       if (newlySelected) selectNode(newlySelected)
+      if (!append && nextNodes.length > 200) {
+        const autoCollapse = new Set<string>()
+        for (const n of nextNodes) {
+          if (n.parent !== null && !n.id.endsWith(':root')) {
+            autoCollapse.add(n.id)
+          }
+        }
+        setCollapsedNodes(autoCollapse)
+      } else if (!append) {
+        setCollapsedNodes(new Set())
+      }
       if (append) setActiveTool('move')
       commitHistorySnapshot(nextNodes, append ? frames : [])
       announce(append ? `Added ${file.name} into current 3D world!` : (clips.length ? `${file.name} imported (${clips.length} animation clip(s) found)` : `${file.name} imported`))
@@ -1075,7 +1166,7 @@ function App() {
         <div className="scene-search"><Search size={14} /><input placeholder="Find an object..." value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} /></div>
         <div className="tree-toolbar"><span>HIERARCHY <span className="muted-count">{nodes.length}</span></span><div style={{ display: 'flex', gap: 4 }}><button className="icon-button small" title="Add Scene Camera (for cinematics & POV)" aria-label="Add Scene Camera" onClick={() => { const camNode = viewport.current?.addSceneCamera?.(); if (camNode) { commitHistorySnapshot(); announce(`${camNode.name} added at current view`) } }}><Video size={14} /></button><button className="icon-button small" title="Import model" onClick={() => fileInput.current?.click()}><Plus size={16} /></button></div></div>
         <div className="scene-tree">
-          {visibleNodes.filter((node) => !node.parent || !nodes.some((parent) => parent.id === node.parent)).map((root) => renderTreeNode(root))}
+          {(childrenByParent.get(null) ?? []).map((root) => renderTreeNode(root))}
           {nodes.length === 0 && <div className="empty-tree">Import a GLB or glTF model to populate the hierarchy.</div>}
           {nodes.length > 0 && visibleNodes.length === 0 && <div className="empty-tree">No objects match “{searchQuery}”.</div>}
         </div>
@@ -1092,8 +1183,8 @@ function App() {
             <div className="tool-divider" />
             <button className={`tool-button toolbar-select ${volumeBoxMode === 'translate' ? 'chosen' : ''}`} title="Move 3D selection box" onClick={() => { setVolumeBoxModeState('translate'); viewport.current?.setVolumeBoxMode?.('translate') }}>Move 3D Box</button>
             <button className={`tool-button toolbar-select ${volumeBoxMode === 'scale' ? 'chosen' : ''}`} title="Resize 3D selection box" onClick={() => { setVolumeBoxModeState('scale'); viewport.current?.setVolumeBoxMode?.('scale') }}>Resize 3D Box</button>
-            <button className="tool-button toolbar-select" title="Extract triangles inside 3D volume box into a new part" onClick={() => { const res = viewport.current?.extractBoxSelection?.(); if (res && res.extractedCount > 0) { setActiveTool('move'); commitHistorySnapshot(); announce(`Extracted ${res.extractedCount} triangles into ${res.extractedIds.length} movable part(s)`) } else announce('Position the 3D Box over mesh geometry to extract triangles') }}>Extract Part</button>
-            <button className="tool-button toolbar-select" title="Erase/delete all geometry inside the 3D Box (great for removing unwanted sections of a 3D world)" onClick={() => { const res = viewport.current?.deleteBoxSelection?.(); if (res && res.deletedCount > 0) { commitHistorySnapshot(); announce(`Erased ${res.deletedCount} triangles inside 3D Box — press Ctrl+Z to undo`) } else announce('Position the 3D Box over geometry you want to erase') }}>Erase Box Region</button>
+            <button className="tool-button toolbar-select" title="Extract triangles inside 3D volume box into a new part" onClick={() => { const res = viewport.current?.extractBoxSelection?.(); if (res && res.extractedCount > 0) { setActiveTool('move'); commitHistorySnapshot(undefined, undefined, true); announce(`Extracted ${res.extractedCount} triangles into ${res.extractedIds.length} movable part(s)`) } else announce('Position the 3D Box over mesh geometry to extract triangles') }}>Extract Part</button>
+            <button className="tool-button toolbar-select" title="Erase/delete all geometry inside the 3D Box (great for removing unwanted sections of a 3D world)" onClick={() => { const res = viewport.current?.deleteBoxSelection?.(); if (res && res.deletedCount > 0) { commitHistorySnapshot(undefined, undefined, true); announce(`Erased ${res.deletedCount} triangles inside 3D Box — press Ctrl+Z to undo`) } else announce('Position the 3D Box over geometry you want to erase') }}>Erase Box Region</button>
           </>}
           <div className="tool-divider" />
           <button className={`tool-button toolbar-select ${freeformMode === 'extract' ? 'chosen' : ''}`} title="Draw a freehand 2D lasso loop on screen to cut & extract an irregular part" onClick={() => { const next = freeformMode === 'extract' ? 'off' : 'extract'; setFreeformModeState(next); viewport.current?.setFreeformMode?.(next); if (next !== 'off') announce('Freeform Lasso Extract: drag a loop on the model to cut out a part') }}>Lasso Cut</button>
@@ -1107,130 +1198,235 @@ function App() {
         </div>
         <div className="viewport-wrap" onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }} onDrop={(e) => { e.preventDefault(); const files = Array.from(e.dataTransfer.files ?? []); const model = files.find((f) => /\.(glb|gltf)$/i.test(f.name)); if (model) void loadFile(model, files, nodes.length > 0) }}><Suspense fallback={<div className="scene-host"><div className="scene-loading"><div className="loading-mark">◈</div><span>Loading GPU viewport</span><small>Preparing renderer and scene</small></div></div>}><SceneViewport ref={viewport} selectedId={selected} selectedIds={selectedIds} activeTool={activeTool} boxSelect={boxSelect} onSelect={selectNode} onSelectMany={selectMany} onNodesChange={setNodes} onRendererChange={setRendererLabel} onRendererError={setRendererError} onTransformChange={setTransform} onTransformCommit={() => commitHistorySnapshot()} /></Suspense>{rendererError && <div className="renderer-error"><strong>3D preview unavailable</strong><span>{rendererError}</span><small>Try a browser with WebGPU or WebGL 2 support and enable hardware acceleration.</small></div>}<div className="viewport-caption"><span><span className="live-dot" /> LIVE PREVIEW</span><span>{activeTool === 'volume' ? 'Move or resize the 3D Box · Click Extract Part to split selected triangles' : boxSelect ? 'Drag over parts · Shift adds · right-to-left crosses' : 'Click to select · Alt+Click cycles inner mesh · Drag & drop .glb to add to world'} <i /> Pan: right drag <i /> Zoom: scroll</span></div><div className="viewport-axis"><div className="axis-y">Y</div><div className="axis-x">X</div><div className="axis-z">Z</div></div></div>
         <div className="timeline">
-          <div className="timeline-head"><div className="timeline-title"><Video size={16} /><strong>Timeline</strong><span className="timeline-separator" /><span className="duration-button">{duration}s</span><select aria-label="Simulation speed" title="Animation playback speed" className="tool-button toolbar-select" value={String(playbackSpeed)} onChange={(e) => { const spd = Number(e.target.value); setPlaybackSpeed(spd); announce(`Simulation speed: ${spd}x`) }}><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1">1x Speed</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="4">4x</option></select><select aria-label="Loop mode" title="Animation loop mode" className="tool-button toolbar-select" value={loopMode} onChange={(e) => { const mode = e.target.value as 'loop' | 'pingpong' | 'once'; setLoopMode(mode); announce(`Loop mode: ${mode}`) }}><option value="loop">Loop</option><option value="pingpong">Ping-Pong</option><option value="once">Play Once</option></select>{embeddedClips.length > 0 && <select aria-label="Embedded animation clip" title="Play built-in GLB animation clip or author custom keyframes" className="tool-button toolbar-select" value={activeClip} onChange={(e) => { const clipName = e.target.value; setActiveClip(clipName); const found = embeddedClips.find((c) => c.name === clipName); if (found && found.duration > 0) setDuration(Math.max(1, Math.ceil(found.duration))); viewport.current?.setActiveAnimationClip?.(clipName || null, time); announce(clipName ? `Active clip: ${clipName}` : 'Custom keyframe timeline active') }}><option value="">Custom Keyframes</option>{embeddedClips.map((c) => <option key={c.name} value={c.name}>Clip: {c.name} ({c.duration}s)</option>)}</select>}</div><div className="timeline-controls"><button className="icon-button small" title="Previous keyframe" disabled={!filteredFrames.some((frame) => frame.time < time)} onClick={() => { const previous = [...filteredFrames].reverse().find((frame) => frame.time < time); if (previous) seek(previous.time) }}><ChevronDown className="rotate-90" size={15} /></button><button className="play-button" disabled={!selectedNode && !activeClip && frames.length === 0} onClick={() => setPlaying((value) => !value)} title={playing ? 'Pause' : 'Play'}>{playing ? <Pause size={14} /> : <Play size={14} fill="currentColor" />}</button><button className="icon-button small" title="Next keyframe" disabled={!filteredFrames.some((frame) => frame.time > time)} onClick={() => { const next = filteredFrames.find((frame) => frame.time > time); if (next) seek(next.time) }}><ChevronDown className="rotate-minus-90" size={15} /></button><span className="time-readout">{time.toFixed(2)} <span>/ {duration.toFixed(2)} s</span></span></div></div>
+          <div className="timeline-head">
+            <div className="timeline-title">
+              <Video size={16} />
+              <strong>Timeline</strong>
+              <span className="timeline-separator" />
+              <div className="duration-stepper" title="Adjust total animation duration (seconds)">
+                <button className="duration-step-btn" title="Decrease animation duration by 1s" aria-label="Decrease duration" onClick={() => { const next = Math.max(1, duration - 1); setDuration(next); if (time > next) seek(next) }}>−</button>
+                <input aria-label="Timeline duration (s)" type="number" min="1" max="3600" step="1" value={duration} onChange={(e) => { const next = Math.max(1, Math.min(3600, Number(e.target.value) || 1)); setDuration(next); if (time > next) seek(next) }} />
+                <span style={{ color: '#777980', fontSize: 9, paddingRight: 2 }}>s</span>
+                <button className="duration-step-btn" title="Increase animation duration by 1s" aria-label="Increase duration" onClick={() => setDuration((d) => Math.min(3600, d + 1))}>+</button>
+              </div>
+              <select aria-label="Simulation speed" title="Animation playback speed" className="tool-button toolbar-select" value={String(playbackSpeed)} onChange={(e) => { const spd = Number(e.target.value); setPlaybackSpeed(spd); announce(`Simulation speed: ${spd}x`) }}><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1">1x Speed</option><option value="1.5">1.5x</option><option value="2">2x</option><option value="4">4x</option></select>
+              <select aria-label="Loop mode" title="Animation loop mode" className="tool-button toolbar-select" value={loopMode} onChange={(e) => { const mode = e.target.value as 'loop' | 'pingpong' | 'once'; setLoopMode(mode); announce(`Loop mode: ${mode}`) }}><option value="loop">Loop</option><option value="pingpong">Ping-Pong</option><option value="once">Play Once</option></select>
+              {embeddedClips.length > 0 && <select aria-label="Embedded animation clip" title="Play built-in GLB animation clip or author custom keyframes" className="tool-button toolbar-select" value={activeClip} onChange={(e) => { const clipName = e.target.value; setActiveClip(clipName); const found = embeddedClips.find((c) => c.name === clipName); if (found && found.duration > 0) setDuration(Math.max(1, Math.ceil(found.duration))); viewport.current?.setActiveAnimationClip?.(clipName || null, time); announce(clipName ? `Active clip: ${clipName}` : 'Custom keyframe timeline active') }}><option value="">Custom Keyframes</option>{embeddedClips.map((c) => <option key={c.name} value={c.name}>Clip: {c.name} ({c.duration}s)</option>)}</select>}
+            </div>
+            <div className="timeline-controls">
+              <button className="icon-button small" title="Step backward 0.1s" aria-label="Step backward" onClick={() => seek(Math.max(0, Number((time - 0.1).toFixed(2))))}>◀</button>
+              <button className="icon-button small" title="Previous keyframe" disabled={!filteredFrames.some((frame) => frame.time < time)} onClick={() => { const previous = [...filteredFrames].reverse().find((frame) => frame.time < time); if (previous) seek(previous.time) }}><ChevronDown className="rotate-90" size={15} /></button>
+              <button className="play-button" disabled={!selectedNode && !activeClip && frames.length === 0} onClick={() => setPlaying((value) => !value)} title={playing ? 'Pause animation' : 'Play animation'}>{playing ? <Pause size={14} /> : <Play size={14} fill="currentColor" />}</button>
+              <button className="icon-button small" title="Next keyframe" disabled={!filteredFrames.some((frame) => frame.time > time)} onClick={() => { const next = filteredFrames.find((frame) => frame.time > time); if (next) seek(next.time) }}><ChevronDown className="rotate-minus-90" size={15} /></button>
+              <button className="icon-button small" title="Step forward 0.1s" aria-label="Step forward" onClick={() => seek(Math.min(duration, Number((time + 0.1).toFixed(2))))}>▶</button>
+              <span className="time-readout">{time.toFixed(2)} <span>/ {duration.toFixed(2)} s</span></span>
+            </div>
+          </div>
           <div className="timeline-body"><div className="tracks"><div className="track-name"><ChevronRight size={13} /><span className="track-color" /><span>{selectedNode?.name ?? 'Select an object'}{selectedIds.length > 1 ? ` + ${selectedIds.length - 1}` : ''}</span><button className="track-add" title={`Add keyframe for ${selectedIds.length || 1} selected object(s)`} disabled={!selectedNode} onClick={addKeyframe}><Plus size={14} /></button></div><div className="track-name property"><span className="track-indent-line" /><span className="property-dot position" /><span>Position</span></div><div className="track-name property"><span className="track-indent-line" /><span className="property-dot rotation" /><span>Rotation</span></div><div className="track-name property"><span className="track-indent-line" /><span className="property-dot scale" /><span>Scale</span></div></div>
-            <div className="timeline-grid" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); const rect = event.currentTarget.getBoundingClientRect(); seek(Math.max(0, Math.min(duration, ((event.clientX - rect.left) / rect.width) * duration))) }} onPointerMove={(event) => { if (event.buttons === 0) return; const rect = event.currentTarget.getBoundingClientRect(); seek(Math.max(0, Math.min(duration, ((event.clientX - rect.left) / rect.width) * duration))) }}><div className="ruler">{Array.from({ length: 9 }, (_, index) => <span key={index} style={{ left: `${index * 12.5}%` }}>{index}s</span>)}</div>{[0, 1, 2, 3].map((row) => <div key={row} className="timeline-lane">{row === 0 && framePositions.map((frame) => <button key={frame.id} className="keyframe" style={{ left: frame.left }} title={`${frame.time.toFixed(2)}s keyframe`} onPointerDown={(event) => event.stopPropagation()} onClick={() => seek(frame.time)} />)}</div>)}<div className="playhead" style={{ left: `${(time / duration) * 100}%` }}><span /></div></div>
-          </div><div className="timeline-footer"><span>Click timeline to scrub</span><span>{filteredFrames.length} keyframe{filteredFrames.length === 1 ? '' : 's'}</span></div>
+            <div className="timeline-grid" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); const rect = event.currentTarget.getBoundingClientRect(); seek(Math.max(0, Math.min(duration, ((event.clientX - rect.left) / rect.width) * duration))) }} onPointerMove={(event) => { if (event.buttons === 0) return; const rect = event.currentTarget.getBoundingClientRect(); seek(Math.max(0, Math.min(duration, ((event.clientX - rect.left) / rect.width) * duration))) }}><div className="ruler">{Array.from({ length: 9 }, (_, index) => { const pct = (index / 8) * 100; const sec = (index / 8) * duration; return <span key={index} style={{ left: `${pct}%` }}>{Number.isInteger(sec) ? sec : sec.toFixed(1)}s</span> })}</div>{[0, 1, 2, 3].map((row) => <div key={row} className="timeline-lane">{row === 0 && framePositions.map((frame) => <button key={frame.id} className="keyframe" style={{ left: frame.left }} title={`${frame.time.toFixed(2)}s keyframe`} onPointerDown={(event) => event.stopPropagation()} onClick={() => seek(frame.time)} />)}</div>)}<div className="playhead" style={{ left: `${(time / duration) * 100}%` }}><span /></div></div>
+          </div><div className="timeline-footer"><span>Click or drag on the timeline ruler to move the playhead · Use − / + to adjust total duration</span><span>{filteredFrames.length} keyframe{filteredFrames.length === 1 ? '' : 's'}</span></div>
         </div>
       </section>
 
       <aside className="inspector panel"><div className="inspector-heading"><div><span className="eyebrow">INSPECTOR</span><h2>{selectedNode?.name ?? 'No selection'}</h2></div></div>
+        <div className="inspector-tabs" role="tablist" aria-label="Inspector sections">
+          <button role="tab" aria-selected={inspectorTab === 'all'} className={`inspector-tab ${inspectorTab === 'all' ? 'active' : ''}`} title="Show all modular inspector panels" onClick={() => setInspectorTab('all')}>All</button>
+          <button role="tab" aria-selected={inspectorTab === 'object'} className={`inspector-tab ${inspectorTab === 'object' ? 'active' : ''}`} title="Transform, Pivot & Hinge, World Snapping, and Hierarchy Parenting" onClick={() => setInspectorTab('object')}>Transform</button>
+          <button role="tab" aria-selected={inspectorTab === 'geometry'} className={`inspector-tab ${inspectorTab === 'geometry' ? 'active' : ''}`} title="3D Box Slicing, Mesh Splitting, Edge Smoothing, and Surface Materials" onClick={() => setInspectorTab('geometry')}>Geometry</button>
+          <button role="tab" aria-selected={inspectorTab === 'motion'} className={`inspector-tab ${inspectorTab === 'motion' ? 'active' : ''}`} title="Universal Procedural Motion, Controller/Gamepad Mapping, and Visual Effects" onClick={() => setInspectorTab('motion')}>Motion & FX</button>
+        </div>
         {selectedNode ? <><div className="object-meta"><div className="object-type-icon"><Box size={17} /></div><div><strong>{selectedNode.type}</strong><span>Scene object</span></div><button className="visibility-pill" title={selectedNode.visible ? 'Hide object' : 'Show object'} aria-label={selectedNode.visible ? 'Hide object' : 'Show object'} onClick={() => toggleVisibility(selectedNode)}>{selectedNode.visible ? <Eye size={14} /> : <EyeOff size={14} />}</button><button className="icon-button small" title="Delete selected part (Delete key)" aria-label="Delete selected part" onClick={deleteSelection}><Trash2 size={14} /></button></div>
           {selectedNode.type === 'Bone' && <div className="inspector-section pivot-section"><div className="section-title"><span>SKELETON BONE RIGGING</span></div><p className="effect-description">Use Rotate or Move tool to pose this bone, then click + on the Timeline to record custom animations.</p><div className="effect-button-row"><button className="effect-action" onClick={() => { setActiveTool('rotate'); announce(`Rotate gizmo attached to bone ${selectedNode.name}`) }}>Pose Bone (Rotate)</button><button className="effect-action" onClick={() => { const next = !skeletonVisible; setSkeletonVisibleState(next); viewport.current?.setSkeletonVisible?.(next) }}>{skeletonVisible ? 'Hide Skeleton' : 'Show Skeleton'}</button></div></div>}
-          <div className="inspector-section"><div className="section-title"><span>TRANSFORM</span><button className="icon-button tiny" title="Reset transform and pivot" aria-label="Reset transform and pivot" onClick={() => { viewport.current?.resetTransform(selected); const initial = viewport.current?.getTransform(selected); if (initial) setTransform(initial); setPivotValue([0, 0, 0]); commitHistorySnapshot() }}><RotateCcw size={14} /></button></div>
-            {(['position', 'rotation', 'scale'] as const).map((group) => <div className="vector-control" key={group}><span className="vector-label">{group === 'position' ? 'Position' : group === 'rotation' ? 'Rotation (°)' : 'Scale'}</span><div className="vector-inputs">{transform[group].map((value, index) => <label key={index} className={`vector-cell axis-${'xyz'[index]}`}><span>{'XYZ'[index]}</span><input value={group === 'rotation' ? (value * 180 / Math.PI).toFixed(1) : value.toFixed(2)} type="number" step={group === 'rotation' ? '1' : '0.1'} onChange={(event) => updateTransform(group, index, Number(event.target.value) * (group === 'rotation' ? Math.PI / 180 : 1))} /></label>)}</div></div>)}
-            <div className="effect-button-row" style={{ marginTop: 8, marginBottom: 0 }}>
-              <button className="effect-action" onClick={duplicateSelection} title="Duplicate this part or model in the 3D world (Ctrl+D)">Duplicate (Ctrl+D)</button>
-              <button className="effect-action" onClick={() => { const next = viewport.current?.snapObjectToGround?.(selected); if (next) { setTransform(next); commitHistorySnapshot(); announce('Snapped object to ground floor (Y=0)') } }} title="Drop floating model or part onto the ground floor">Snap to Ground</button>
+          {(inspectorTab === 'all' || inspectorTab === 'object') && <div className={`inspector-section ${collapsedSections.has('transform') ? 'collapsed' : ''}`}>
+            <div className="section-title">
+              <button className="section-header-btn" style={{ marginBottom: 0, width: 'auto' }} onClick={() => toggleSection('transform')} title="Collapse or expand Transform section">
+                <span className="section-header-left">{collapsedSections.has('transform') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<span>TRANSFORM</span></span>
+              </button>
+              <button className="icon-button tiny" title="Reset transform and pivot" aria-label="Reset transform and pivot" onClick={() => { viewport.current?.resetTransform(selected); const initial = viewport.current?.getTransform(selected); if (initial) setTransform(initial); setPivotValue([0, 0, 0]); commitHistorySnapshot() }}><RotateCcw size={14} /></button>
             </div>
-            <div className="effect-button-row" style={{ marginTop: 6, marginBottom: 0 }}>
-              <button className="effect-action" onClick={() => { const camNode = viewport.current?.attachFpsCameraToNode?.(selected); if (camNode) { setActivePovId(camNode.id); commitHistorySnapshot(); announce(`Attached ${camNode.name} to ${selectedNode.name} — live First-Person POV active!`) } }} title="Attach a First-Person (FPS) camera to this head, driver seat, or vehicle">+ Attach FPS POV Camera</button>
-              {activePovId && <button className="effect-action remove" style={{ marginTop: 0 }} onClick={() => { setActivePovId(''); announce('Exited locked FPS POV camera') }}>Exit FPS POV</button>}
-            </div>
-            <label className="effect-single-input" style={{ marginTop: 8, marginBottom: 0 }}>Snap / Align Position To Target
-              <select aria-label="Snap position to target object" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value="" onChange={(e) => { const targetId = e.target.value; if (!targetId) return; const next = viewport.current?.alignObjectToTarget?.(selected, targetId); if (next) { setTransform(next); commitHistorySnapshot(); announce(`Aligned ${selectedNode.name} to ${nodes.find((n) => n.id === targetId)?.name}`) } }}>
-                <option value="">Choose target (e.g. Car Seat / Door)...</option>
-                {nodes.filter((n) => n.id !== selected).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.type})</option>)}
-              </select>
-            </label>
-            <label className="effect-single-input" style={{ marginTop: 6, marginBottom: 0 }}>Attach / Parent Limb To
-              <select aria-label="Attach to parent object" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={selectedNode.parent ?? ''} onChange={(e) => { const nextParent = e.target.value || null; const updated = viewport.current?.setParentObject?.(selected, nextParent); if (updated) { setNodes(updated); commitHistorySnapshot(updated); announce(`Attached ${selectedNode.name} to ${nodes.find((n) => n.id === nextParent)?.name ?? 'World Root'}`) } }}>
-                <option value="">World Root</option>
-                {nodes.filter((n) => n.id !== selected).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.type})</option>)}
-              </select>
-            </label>
-          </div>
-          <div className="inspector-section pivot-section">
-            <div className="section-title"><span>CONTROLLER & INPUT MAPPING</span></div>
-            <p className="effect-description">Map Keyboard, PlayStation, Xbox, or Drone RC Transmitter sticks/triggers to control {selectedNode.name} on any axis.{connectedGamepad ? ` (${connectedGamepad})` : ''}</p>
-            <div className="effect-input-row">
-              <label>Input / Controller
-                <select aria-label="Binding input" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={newBindInput} onChange={(e) => setNewBindInput(e.target.value)}>
-                  <optgroup label="Keyboard">
-                    {['w', 'a', 's', 'd', 'e', 'f', 'c', 'q', 'r', 'space', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].map((k) => <option key={k} value={k}>Key: {k.toUpperCase()}</option>)}
-                  </optgroup>
-                  <optgroup label="Gamepad / Drone RC Sticks (Axes)">
-                    <option value="gp:axis:0">Left Stick X (Yaw / Strafe / Roll)</option>
-                    <option value="gp:axis:1">Left Stick Y (Throttle / Move / Pitch)</option>
-                    <option value="gp:axis:2">Right Stick X (Look / Turn / Aim X)</option>
-                    <option value="gp:axis:3">Right Stick Y (Pitch / Look / Aim Y)</option>
-                  </optgroup>
-                  <optgroup label="PlayStation / Xbox / RC Buttons">
-                    <option value="gp:btn:0">Cross (PS) / A (Xbox)</option>
-                    <option value="gp:btn:1">Circle (PS) / B (Xbox)</option>
-                    <option value="gp:btn:2">Square (PS) / X (Xbox)</option>
-                    <option value="gp:btn:3">Triangle (PS) / Y (Xbox)</option>
-                    <option value="gp:btn:4">L1 / LB Bumper</option>
-                    <option value="gp:btn:5">R1 / RB Bumper</option>
-                    <option value="gp:btn:6">L2 / LT Analog Trigger</option>
-                    <option value="gp:btn:7">R2 / RT Analog Trigger</option>
-                    <option value="gp:btn:12">D-Pad Up</option>
-                    <option value="gp:btn:13">D-Pad Down</option>
-                    <option value="gp:btn:14">D-Pad Left</option>
-                    <option value="gp:btn:15">D-Pad Right</option>
-                  </optgroup>
-                </select>
-              </label>
-              <label>Axis
-                <select aria-label="Binding axis" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={newBindAxis} onChange={(e) => setNewBindAxis(e.target.value as 'x' | 'y' | 'z')}>
-                  <option value="x">X Axis</option>
-                  <option value="y">Y Axis</option>
-                  <option value="z">Z Axis</option>
-                </select>
-              </label>
-            </div>
-            <div className="effect-input-row">
-              <label>Behavior
-                <select aria-label="Binding action" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={newBindAction} onChange={(e) => setNewBindAction(e.target.value as typeof newBindAction)}>
-                  <option value="translate">Translate / Move Along Axis</option>
-                  <option value="rotate">Rotate / Turn Around Axis</option>
-                  <option value="hinge">Toggle Joint Hinge (±85°)</option>
-                  <option value="spin">Continuous Spin / Throttle</option>
-                  <option value="cameraPov">Switch to POV Camera</option>
-                  <option value="playTimeline">Play / Pause Timeline</option>
-                </select>
-              </label>
-              <label>Sensitivity
-                <input aria-label="Binding speed" type="number" step="0.25" min="-10" max="10" value={newBindSpeed} onChange={(e) => setNewBindSpeed(Number(e.target.value) || 1)} />
-              </label>
-            </div>
-            <button className="effect-action" onClick={() => { const binding = { id: crypto.randomUUID(), targetId: selected, input: newBindInput, axis: newBindAxis, action: newBindAction, speed: newBindSpeed }; setKeyBindings((prev) => [...prev.filter((b) => !(b.targetId === selected && b.input === newBindInput && b.axis === newBindAxis)), binding]); announce(`Mapped [${newBindInput.toUpperCase()}] → ${selectedNode.name} (${newBindAction} on ${newBindAxis.toUpperCase()})`) }}>+ Map Input to {selectedNode.name}</button>
-            {keyBindings.filter((b) => b.targetId === selected).map((b) => (
-              <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, fontSize: 10, color: '#b7f36b' }}>
-                <span>[{b.input.toUpperCase()}] → {b.action} ({b.axis.toUpperCase()} · {b.speed}x)</span>
-                <button className="icon-button tiny" onClick={() => setKeyBindings((prev) => prev.filter((item) => item.id !== b.id))}><X size={12} /></button>
+            {!collapsedSections.has('transform') && <>
+              {(['position', 'rotation', 'scale'] as const).map((group) => {
+                const stepVal = group === 'rotation' ? 5 : 0.1
+                const factor = group === 'rotation' ? Math.PI / 180 : 1
+                return <div className="vector-control" key={group}><span className="vector-label">{group === 'position' ? 'Position' : group === 'rotation' ? 'Rotation (°)' : 'Scale'}</span><div className="vector-inputs">{transform[group].map((value, index) => {
+                  const displayVal = group === 'rotation' ? Number((value * 180 / Math.PI).toFixed(1)) : Number(value.toFixed(2))
+                  return <label key={index} className={`vector-cell vec-${'xyz'[index]}`}>
+                    <span title={`Drag left/right to scrub ${group} ${'XYZ'[index]}`} onPointerDown={(e) => {
+                      e.preventDefault()
+                      const startX = e.clientX
+                      const startVal = displayVal
+                      const onMove = (me: PointerEvent) => {
+                        const delta = (me.clientX - startX) * (group === 'rotation' ? 0.5 : 0.02)
+                        updateTransform(group, index, (startVal + delta) * factor)
+                      }
+                      const onUp = () => {
+                        window.removeEventListener('pointermove', onMove)
+                        window.removeEventListener('pointerup', onUp)
+                      }
+                      window.addEventListener('pointermove', onMove)
+                      window.addEventListener('pointerup', onUp)
+                    }}>{'XYZ'[index]}</span>
+                    <input value={group === 'rotation' ? (value * 180 / Math.PI).toFixed(1) : value.toFixed(2)} type="number" step={group === 'rotation' ? '1' : '0.1'} onChange={(event) => updateTransform(group, index, Number(event.target.value) * factor)} />
+                    <div className="vector-step-btns">
+                      <button type="button" className="vector-step-btn" title={`Increase ${group} ${'XYZ'[index]}`} onClick={(e) => { e.preventDefault(); updateTransform(group, index, (displayVal + stepVal) * factor) }}>▲</button>
+                      <button type="button" className="vector-step-btn" title={`Decrease ${group} ${'XYZ'[index]}`} onClick={(e) => { e.preventDefault(); updateTransform(group, index, (displayVal - stepVal) * factor) }}>▼</button>
+                    </div>
+                  </label>
+                })}</div></div>
+              })}
+              <div className="effect-button-row" style={{ marginTop: 8, marginBottom: 0 }}>
+                <button className="effect-action" onClick={duplicateSelection} title="Duplicate this part or model in the 3D world (Ctrl+D)">Duplicate (Ctrl+D)</button>
+                <button className="effect-action" onClick={() => { const next = viewport.current?.snapObjectToGround?.(selected); if (next) { setTransform(next); commitHistorySnapshot(); announce('Snapped object to ground floor (Y=0)') } }} title="Drop floating model or part onto the ground floor">Snap to Ground</button>
               </div>
-            ))}
-          </div>
-          <div className="inspector-section pivot-section">
-            <div className="section-title"><span>PROCEDURAL MOTION & PHYSICS</span><select aria-label="Motion axis" className="tool-button toolbar-select" style={{ height: 20, minWidth: 58, fontSize: 9 }} value={motionAxis} onChange={(e) => setMotionAxis(e.target.value as 'x' | 'y' | 'z')}><option value="x">Axis: X</option><option value="y">Axis: Y</option><option value="z">Axis: Z</option></select></div>
-            <p className="effect-description">Universal motion generators for any limb, creature, joint, rotor, or prop on the selected axis.</p>
-            <div className="effect-button-row">
-              <button className="effect-action" onClick={() => applyUniversalMotion('oscillate')}>Oscillate / Stride</button>
-              <button className="effect-action" onClick={() => applyUniversalMotion('hinge')}>Hinge Swing</button>
-              <button className="effect-action" onClick={() => applyUniversalMotion('impulse')}>Impulse / Bounce</button>
-            </div>
-            <div className="effect-button-row">
-              <button className="effect-action" onClick={() => applyUniversalMotion('spin')}>Continuous Spin</button>
-              <button className="effect-action" onClick={() => applyUniversalMotion('float')}>Hover / Wave</button>
-              <button className="effect-action" onClick={() => applyUniversalMotion('damping')}>Inertia Curve</button>
-            </div>
-            {selectedNode.type === 'Mesh' && <>
-              <div className="effect-subsection-title">SURFACE MATERIAL PRESET</div>
-              <div className="effect-button-row" style={{ marginBottom: 0 }}>
-                <button className="effect-action" onClick={() => { if (viewport.current?.setMeshSurfacePreset?.(selected, 'mirror')) announce('Applied Reflective / Metallic PBR surface') }}>Reflective / Chrome</button>
-                <button className="effect-action" onClick={() => { if (viewport.current?.setMeshSurfacePreset?.(selected, 'glass')) announce('Applied Translucent / Glass PBR surface') }}>Translucent / Glass</button>
-                <button className="effect-action" onClick={() => { if (viewport.current?.setMeshSurfacePreset?.(selected, 'default')) announce('Restored Standard Matte PBR surface') }}>Standard Matte</button>
+              <div className="effect-button-row" style={{ marginTop: 6, marginBottom: 0 }}>
+                <button className="effect-action" onClick={() => { const camNode = viewport.current?.attachFpsCameraToNode?.(selected); if (camNode) { setActivePovId(camNode.id); commitHistorySnapshot(); announce(`Attached ${camNode.name} to ${selectedNode.name} — live First-Person POV active!`) } }} title="Attach a First-Person (FPS) camera to this object">+ Attach POV Camera</button>
+                {activePovId && <button className="effect-action remove" style={{ marginTop: 0 }} onClick={() => { setActivePovId(''); announce('Exited locked POV camera') }}>Exit POV</button>}
               </div>
+              <label className="effect-single-input" style={{ marginTop: 8, marginBottom: 0 }}>Snap / Align Position To Target
+                <select aria-label="Snap position to target object" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value="" onChange={(e) => { const targetId = e.target.value; if (!targetId) return; const next = viewport.current?.alignObjectToTarget?.(selected, targetId); if (next) { setTransform(next); commitHistorySnapshot(); announce(`Aligned ${selectedNode.name} to ${nodes.find((n) => n.id === targetId)?.name}`) } }}>
+                  <option value="">Choose target object in scene...</option>
+                  {nodes.filter((n) => n.id !== selected).slice(0, 120).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.type})</option>)}
+                </select>
+              </label>
+              <label className="effect-single-input" style={{ marginTop: 6, marginBottom: 0 }}>Attach / Parent To
+                <select aria-label="Attach to parent object" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={selectedNode.parent ?? ''} onChange={(e) => { const nextParent = e.target.value || null; const updated = viewport.current?.setParentObject?.(selected, nextParent); if (updated) { setNodes(updated); commitHistorySnapshot(updated); announce(`Attached ${selectedNode.name} to ${nodes.find((n) => n.id === nextParent)?.name ?? 'World Root'}`) } }}>
+                  <option value="">World Root</option>
+                  {nodes.filter((n) => n.id !== selected && (n.id === selectedNode.parent || n.parent === null)).concat(nodes.filter((n) => n.id !== selected && n.id !== selectedNode.parent && n.parent !== null).slice(0, 120)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.type})</option>)}
+                </select>
+              </label>
             </>}
-          </div>
+          </div>}
+          {(inspectorTab === 'all' || inspectorTab === 'motion') && <div className={`inspector-section pivot-section ${collapsedSections.has('controller') ? 'collapsed' : ''}`}>
+            <button className="section-header-btn" onClick={() => toggleSection('controller')} title="Collapse or expand Controller & Input Mapping">
+              <span className="section-header-left">{collapsedSections.has('controller') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<span>CONTROLLER & INPUT MAPPING</span></span>
+            </button>
+            {!collapsedSections.has('controller') && <>
+              <p className="effect-description">Map Keyboard, PlayStation, Xbox, or Drone RC Transmitter sticks/triggers to control {selectedNode.name} on any axis.{connectedGamepad ? ` (${connectedGamepad})` : ''}</p>
+              <div className="effect-input-row">
+                <label>Input / Controller
+                  <select aria-label="Binding input" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={newBindInput} onChange={(e) => setNewBindInput(e.target.value)}>
+                    <optgroup label="Keyboard">
+                      {['w', 'a', 's', 'd', 'e', 'f', 'c', 'q', 'r', 'space', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].map((k) => <option key={k} value={k}>Key: {k.toUpperCase()}</option>)}
+                    </optgroup>
+                    <optgroup label="Gamepad / Drone RC Sticks (Axes)">
+                      <option value="gp:axis:0">Left Stick X (Yaw / Strafe / Roll)</option>
+                      <option value="gp:axis:1">Left Stick Y (Throttle / Move / Pitch)</option>
+                      <option value="gp:axis:2">Right Stick X (Look / Turn / Aim X)</option>
+                      <option value="gp:axis:3">Right Stick Y (Pitch / Look / Aim Y)</option>
+                    </optgroup>
+                    <optgroup label="PlayStation / Xbox / RC Buttons">
+                      <option value="gp:btn:0">Cross (PS) / A (Xbox)</option>
+                      <option value="gp:btn:1">Circle (PS) / B (Xbox)</option>
+                      <option value="gp:btn:2">Square (PS) / X (Xbox)</option>
+                      <option value="gp:btn:3">Triangle (PS) / Y (Xbox)</option>
+                      <option value="gp:btn:4">L1 / LB Bumper</option>
+                      <option value="gp:btn:5">R1 / RB Bumper</option>
+                      <option value="gp:btn:6">L2 / LT Analog Trigger</option>
+                      <option value="gp:btn:7">R2 / RT Analog Trigger</option>
+                      <option value="gp:btn:12">D-Pad Up</option>
+                      <option value="gp:btn:13">D-Pad Down</option>
+                      <option value="gp:btn:14">D-Pad Left</option>
+                      <option value="gp:btn:15">D-Pad Right</option>
+                    </optgroup>
+                  </select>
+                </label>
+                <label>Axis
+                  <select aria-label="Binding axis" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={newBindAxis} onChange={(e) => setNewBindAxis(e.target.value as 'x' | 'y' | 'z')}>
+                    <option value="x">X Axis</option>
+                    <option value="y">Y Axis</option>
+                    <option value="z">Z Axis</option>
+                  </select>
+                </label>
+              </div>
+              <div className="effect-input-row">
+                <label>Behavior
+                  <select aria-label="Binding action" className="tool-button toolbar-select" style={{ width: '100%', height: 26 }} value={newBindAction} onChange={(e) => setNewBindAction(e.target.value as typeof newBindAction)}>
+                    <option value="translate">Translate / Move Along Axis</option>
+                    <option value="rotate">Rotate / Turn Around Axis</option>
+                    <option value="hinge">Toggle Joint Hinge (±85°)</option>
+                    <option value="spin">Continuous Spin / Throttle</option>
+                    <option value="cameraPov">Switch to POV Camera</option>
+                    <option value="playTimeline">Play / Pause Timeline</option>
+                  </select>
+                </label>
+                <label>Sensitivity
+                  <input aria-label="Binding speed" type="number" step="0.25" min="-10" max="10" value={newBindSpeed} onChange={(e) => setNewBindSpeed(Number(e.target.value) || 1)} />
+                </label>
+              </div>
+              <button className="effect-action" title="Bind the selected key, gamepad stick, or trigger to this 3D object" onClick={() => { const binding = { id: crypto.randomUUID(), targetId: selected, input: newBindInput, axis: newBindAxis, action: newBindAction, speed: newBindSpeed }; setKeyBindings((prev) => [...prev.filter((b) => !(b.targetId === selected && b.input === newBindInput && b.axis === newBindAxis)), binding]); announce(`Mapped [${newBindInput.toUpperCase()}] → ${selectedNode.name} (${newBindAction} on ${newBindAxis.toUpperCase()})`) }}>+ Map Input to {selectedNode.name}</button>
+              {keyBindings.filter((b) => b.targetId === selected).map((b) => (
+                <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, fontSize: 10, color: '#b7f36b' }}>
+                  <span>[{b.input.toUpperCase()}] → {b.action} ({b.axis.toUpperCase()} · {b.speed}x)</span>
+                  <button className="icon-button tiny" title="Remove input binding" onClick={() => setKeyBindings((prev) => prev.filter((item) => item.id !== b.id))}><X size={12} /></button>
+                </div>
+              ))}
+            </>}
+          </div>}
+          {(inspectorTab === 'all' || inspectorTab === 'motion') && <div className={`inspector-section pivot-section ${collapsedSections.has('motion') ? 'collapsed' : ''}`}>
+            <div className="section-title">
+              <button className="section-header-btn" style={{ marginBottom: 0, width: 'auto' }} onClick={() => toggleSection('motion')} title="Collapse or expand Procedural Motion & Physics">
+                <span className="section-header-left">{collapsedSections.has('motion') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<span>PROCEDURAL MOTION & PHYSICS</span></span>
+              </button>
+              <select aria-label="Motion axis" className="tool-button toolbar-select" style={{ height: 20, minWidth: 58, fontSize: 9 }} value={motionAxis} onChange={(e) => setMotionAxis(e.target.value as 'x' | 'y' | 'z')}><option value="x">Axis: X</option><option value="y">Axis: Y</option><option value="z">Axis: Z</option></select>
+            </div>
+            {!collapsedSections.has('motion') && <>
+              <p className="effect-description">Universal motion generators for any limb, creature, joint, rotor, or prop on the selected axis.</p>
+              <div className="effect-button-row">
+                <button className="effect-action" title="Generate cyclic back-and-forth wave keyframes (walking legs, flapping wings, wagging tails)" onClick={() => applyUniversalMotion('oscillate')}>Oscillate / Stride</button>
+                <button className="effect-action" title="Generate 85° hinge open-and-close keyframes on the chosen axis" onClick={() => applyUniversalMotion('hinge')}>Hinge Swing</button>
+                <button className="effect-action" title="Generate quick spring impulse / bounce / recoil keyframes" onClick={() => applyUniversalMotion('impulse')}>Impulse / Bounce</button>
+              </div>
+              <div className="effect-button-row">
+                <button className="effect-action" title="Generate continuous 360° rotation keyframes (wheels, propellers, gears)" onClick={() => applyUniversalMotion('spin')}>Continuous Spin</button>
+                <button className="effect-action" title="Generate smooth floating / hovering / breathing idle motion" onClick={() => applyUniversalMotion('float')}>Hover / Wave</button>
+                <button className="effect-action" title="Generate physical acceleration & braking pitch inertia keyframes" onClick={() => applyUniversalMotion('damping')}>Inertia Curve</button>
+              </div>
+              {selectedNode.type === 'Mesh' && <>
+                <div className="effect-subsection-title">SURFACE MATERIAL PRESET</div>
+                <div className="effect-button-row" style={{ marginBottom: 0 }}>
+                  <button className="effect-action" title="Apply reflective metallic chrome PBR material" onClick={() => { if (viewport.current?.setMeshSurfacePreset?.(selected, 'mirror')) announce('Applied Reflective / Metallic PBR surface') }}>Reflective / Chrome</button>
+                  <button className="effect-action" title="Apply translucent glass / visor PBR material" onClick={() => { if (viewport.current?.setMeshSurfacePreset?.(selected, 'glass')) announce('Applied Translucent / Glass PBR surface') }}>Translucent / Glass</button>
+                  <button className="effect-action" title="Restore standard matte PBR surface material" onClick={() => { if (viewport.current?.setMeshSurfacePreset?.(selected, 'default')) announce('Restored Standard Matte PBR surface') }}>Standard Matte</button>
+                </div>
+              </>}
+            </>}
+          </div>}
           {selectedNode.type === 'Camera' && <div className="inspector-section pivot-section"><div className="section-title"><span>CAMERA POV & CINEMATICS</span></div><p className="effect-description">Move or rotate this camera with the gizmo and add keyframes on the timeline for cinematic shots.</p><div className="effect-button-row"><button className="effect-action" onClick={() => { viewport.current?.setActivePovCamera?.(selected); announce(`Viewing through ${selectedNode.name}`) }}>Look Through Camera (POV)</button><button className="effect-action" onClick={() => { const pose = viewport.current?.getCameraPose(); if (pose) { announce('Camera aligned to current viewport') } }}>Align to Current View</button></div></div>}
-          {selectedNode.type === 'Mesh' && <div className="inspector-section pivot-section"><div className="section-title"><span>PART BREAKING</span></div><p className="effect-description">Click any spot on the model while 3D Box is active to snap the box there, or use a quick slice preset below.</p><div className="effect-button-row"><button className="effect-action" onClick={() => { const updated = viewport.current?.splitSelectedMesh(selected, 'islands'); if (updated) { setNodes(updated); commitHistorySnapshot(updated); announce('Split mesh into loose parts') } else announce('Mesh is already a single connected part — use 3D Box to slice') }}>Split Loose Parts</button><button className="effect-action" onClick={() => { const updated = viewport.current?.splitSelectedMesh(selected, 'materials'); if (updated) { setNodes(updated); commitHistorySnapshot(updated); announce('Split mesh by material groups') } else announce('Mesh has only one material group') }}>Split by Material</button></div><div className="effect-button-row"><button className="effect-action" onClick={() => { setBoxSelect(false); setActiveTool('volume'); viewport.current?.setVolumeBoxMode?.(volumeBoxMode); viewport.current?.applyVolumePreset?.('top'); announce('3D Box snapped to Top Half — click anywhere on mesh to snap box to that spot') }}>3D Box Selector</button><button className="effect-action" onClick={() => { const res = viewport.current?.extractBoxSelection?.(); if (res && res.extractedCount > 0) { setActiveTool('move'); commitHistorySnapshot(); announce(`Clean-sliced ${res.extractedCount} triangles into new movable part`) } else announce('Enable 3D Box Selector and position it over triangles first') }}>Extract 3D Box Part</button></div><div className="effect-button-row"><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('top'); announce('3D Box: Top Half') }}>Top Half</button><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('bottom'); announce('3D Box: Bottom Half') }}>Bottom Half</button><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('left'); announce('3D Box: Left Half') }}>Left</button><button className="effect-action" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('right'); announce('3D Box: Right Half') }}>Right</button></div><div className="effect-button-row"><button className="effect-action" onClick={() => { const count = viewport.current?.smoothSelectedMesh?.(selected) ?? 0; if (count > 0) { commitHistorySnapshot(); announce('Smoothed spiky boundary edges on selected mesh') } else announce('No jagged open boundary edges found on this mesh') }}>Smooth Spiky Edges</button><button className="effect-action remove" style={{ marginTop: 0 }} onClick={() => { const res = viewport.current?.deleteBoxSelection?.(); if (res && res.deletedCount > 0) { commitHistorySnapshot(); announce(`Erased ${res.deletedCount} triangles inside 3D Box`) } else deleteSelection() }}>Delete / Erase Part</button></div></div>}
-          {selectedNode.type === 'Mesh' && <div className="inspector-section pivot-section"><div className="section-title"><span>PIVOT & JOINT HINGE</span></div><p className="effect-description">Move the part’s origin to its shoulder, elbow, or door hinge before animating rotation.</p><div className="effect-button-row"><button className="effect-action" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'top'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Top (Shoulder / Hip)') } }}>Shoulder / Top</button><button className="effect-action" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'bottom'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Bottom (Base / Foot)') } }}>Base / Bottom</button><button className="effect-action" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'left'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Left Hinge') } }}>Left Hinge</button><button className="effect-action" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'right'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Right Hinge') } }}>Right Hinge</button></div><button className="effect-action" onClick={() => { const next = viewport.current?.setPivotFromLastHit(selected); if (next) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot(); announce('Pivot moved to the last clicked point') } else announce('Click the mesh surface first, then set its pivot') }}>Set from last clicked surface</button><div className="vector-control pivot-control"><span className="vector-label">Local point</span><div className="vector-inputs">{pivot.map((value, index) => <label key={index} className={`vector-cell axis-${'xyz'[index]}`}><span>{'XYZ'[index]}</span><input aria-label={`Pivot ${'XYZ'[index]}`} type="number" step="0.05" value={value.toFixed(2)} onChange={(event) => { const next = [...pivot] as [number, number, number]; next[index] = Number(event.target.value); if (viewport.current?.setPivot(selected, next)) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot() } }} /></label>)}</div></div><button className="effect-action remove" disabled={pivot.every((value) => Math.abs(value) < 1e-8)} onClick={() => { viewport.current?.setPivot(selected, [0, 0, 0]); setPivotValue([0, 0, 0]); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot() }}>Reset pivot</button></div>}
-          {objectStats && <div className="inspector-section geometry-section"><div className="section-title"><span>GEOMETRY</span></div><div className="geometry-grid"><span>Meshes</span><strong>{objectStats.meshCount.toLocaleString()}</strong><span>Vertices</span><strong>{objectStats.vertexCount.toLocaleString()}</strong><span>Triangles</span><strong>{objectStats.triangleCount.toLocaleString()}</strong><span>Materials</span><strong>{objectStats.materialCount.toLocaleString()}</strong><span>Bounds</span><strong>{objectStats.dimensions.map((value) => value.toFixed(2)).join(' × ')}</strong></div></div>}
-          {selectedNode.type === 'Mesh' && <div className="inspector-section effect-section">
-            <div className="section-title"><span>VISUAL EFFECTS</span></div>
-            {(() => {
+          {selectedNode.type === 'Mesh' && (inspectorTab === 'all' || inspectorTab === 'geometry') && <div className={`inspector-section pivot-section ${collapsedSections.has('partBreaking') ? 'collapsed' : ''}`}>
+            <button className="section-header-btn" onClick={() => toggleSection('partBreaking')} title="Collapse or expand Part Breaking & Mesh Slicing">
+              <span className="section-header-left">{collapsedSections.has('partBreaking') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<span>PART BREAKING</span></span>
+            </button>
+            {!collapsedSections.has('partBreaking') && <>
+              <p className="effect-description">Click any spot on the model while 3D Box is active to snap the box there, or use a quick slice preset below.</p>
+              <div className="effect-button-row"><button className="effect-action" title="Automatically separate disconnected mesh islands into individual objects" onClick={() => { const updated = viewport.current?.splitSelectedMesh(selected, 'islands'); if (updated) { setNodes(updated); commitHistorySnapshot(updated, undefined, true); announce('Split mesh into loose parts') } else announce('Mesh is already a single connected part — use 3D Box to slice') }}>Split Loose Parts</button><button className="effect-action" title="Separate mesh sub-groups that use different materials" onClick={() => { const updated = viewport.current?.splitSelectedMesh(selected, 'materials'); if (updated) { setNodes(updated); commitHistorySnapshot(updated, undefined, true); announce('Split mesh by material groups') } else announce('Mesh has only one material group') }}>Split by Material</button></div>
+              <div className="effect-button-row"><button className="effect-action" title="Activate interactive 3D cutting box in the viewport" onClick={() => { setBoxSelect(false); setActiveTool('volume'); viewport.current?.setVolumeBoxMode?.(volumeBoxMode); viewport.current?.applyVolumePreset?.('top'); announce('3D Box snapped to Top Half — click anywhere on mesh to snap box to that spot') }}>3D Box Selector</button><button className="effect-action" title="Slice and extract triangles inside the 3D Box into a new independent part" onClick={() => { const res = viewport.current?.extractBoxSelection?.(); if (res && res.extractedCount > 0) { setActiveTool('move'); commitHistorySnapshot(undefined, undefined, true); announce(`Clean-sliced ${res.extractedCount} triangles into new movable part`) } else announce('Enable 3D Box Selector and position it over triangles first') }}>Extract 3D Box Part</button></div>
+              <div className="effect-button-row"><button className="effect-action" title="Snap 3D Box to top half of selected mesh" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('top'); announce('3D Box: Top Half') }}>Top Half</button><button className="effect-action" title="Snap 3D Box to bottom half of selected mesh" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('bottom'); announce('3D Box: Bottom Half') }}>Bottom Half</button><button className="effect-action" title="Snap 3D Box to left half of selected mesh" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('left'); announce('3D Box: Left Half') }}>Left</button><button className="effect-action" title="Snap 3D Box to right half of selected mesh" onClick={() => { setActiveTool('volume'); viewport.current?.applyVolumePreset?.('right'); announce('3D Box: Right Half') }}>Right</button></div>
+              <div className="effect-button-row"><button className="effect-action" title="Smooth jagged or spiky open boundary edges after slicing" onClick={() => { const count = viewport.current?.smoothSelectedMesh?.(selected) ?? 0; if (count > 0) { commitHistorySnapshot(undefined, undefined, true); announce('Smoothed spiky boundary edges on selected mesh') } else announce('No jagged open boundary edges found on this mesh') }}>Smooth Spiky Edges</button><button className="effect-action remove" style={{ marginTop: 0 }} title="Erase triangles inside 3D Box or delete the selected object" onClick={() => { const res = viewport.current?.deleteBoxSelection?.(); if (res && res.deletedCount > 0) { commitHistorySnapshot(undefined, undefined, true); announce(`Erased ${res.deletedCount} triangles inside 3D Box`) } else deleteSelection() }}>Delete / Erase Part</button></div>
+            </>}
+          </div>}
+          {selectedNode.type === 'Mesh' && (inspectorTab === 'all' || inspectorTab === 'object') && <div className={`inspector-section pivot-section ${collapsedSections.has('pivot') ? 'collapsed' : ''}`}>
+            <button className="section-header-btn" onClick={() => toggleSection('pivot')} title="Collapse or expand Pivot & Joint Hinge">
+              <span className="section-header-left">{collapsedSections.has('pivot') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<span>PIVOT & JOINT HINGE</span></span>
+            </button>
+            {!collapsedSections.has('pivot') && <>
+              <p className="effect-description">Move the part’s origin to its shoulder, elbow, or hinge before animating rotation.</p>
+              <div className="effect-button-row"><button className="effect-action" title="Snap rotation pivot to top edge (shoulder / hip joint)" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'top'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Top (Shoulder / Hip)') } }}>Shoulder / Top</button><button className="effect-action" title="Snap rotation pivot to bottom edge (base / ankle)" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'bottom'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Bottom (Base / Foot)') } }}>Base / Bottom</button><button className="effect-action" title="Snap rotation pivot to left hinge edge" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'left'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Left Hinge') } }}>Left Hinge</button><button className="effect-action" title="Snap rotation pivot to right hinge edge" onClick={() => { const p = viewport.current?.setQuickHingePivot?.(selected, 'right'); if (p) { setPivotValue(p); const t = viewport.current?.getTransform(selected); if (t) setTransform(t); commitHistorySnapshot(); announce('Joint pivot set to Right Hinge') } }}>Right Hinge</button></div>
+              <button className="effect-action" title="Move pivot point to the exact surface point you last clicked on the mesh" onClick={() => { const next = viewport.current?.setPivotFromLastHit(selected); if (next) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot(); announce('Pivot moved to the last clicked point') } else announce('Click the mesh surface first, then set its pivot') }}>Set from last clicked surface</button>
+              <div className="vector-control pivot-control"><span className="vector-label">Local point</span><div className="vector-inputs">{pivot.map((value, index) => <label key={index} className={`vector-cell vec-${'xyz'[index]}`}><span>{'XYZ'[index]}</span><input aria-label={`Pivot ${'XYZ'[index]}`} type="number" step="0.05" value={value.toFixed(2)} onChange={(event) => { const next = [...pivot] as [number, number, number]; next[index] = Number(event.target.value); if (viewport.current?.setPivot(selected, next)) { setPivotValue(next); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot() } }} /></label>)}</div></div>
+              <button className="effect-action remove" disabled={pivot.every((value) => Math.abs(value) < 1e-8)} onClick={() => { viewport.current?.setPivot(selected, [0, 0, 0]); setPivotValue([0, 0, 0]); const updated = viewport.current?.getTransform(selected); if (updated) setTransform(updated); commitHistorySnapshot() }}>Reset pivot</button>
+            </>}
+          </div>}
+          {objectStats && (inspectorTab === 'all' || inspectorTab === 'geometry') && <div className={`inspector-section geometry-section ${collapsedSections.has('geometry') ? 'collapsed' : ''}`}>
+            <button className="section-header-btn" onClick={() => toggleSection('geometry')} title="Collapse or expand Geometry Statistics">
+              <span className="section-header-left">{collapsedSections.has('geometry') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<span>GEOMETRY</span></span>
+            </button>
+            {!collapsedSections.has('geometry') && <div className="geometry-grid"><span>Meshes</span><strong>{objectStats.meshCount.toLocaleString()}</strong><span>Vertices</span><strong>{objectStats.vertexCount.toLocaleString()}</strong><span>Triangles</span><strong>{objectStats.triangleCount.toLocaleString()}</strong><span>Materials</span><strong>{objectStats.materialCount.toLocaleString()}</strong><span>Bounds</span><strong>{objectStats.dimensions.map((value) => value.toFixed(2)).join(' × ')}</strong></div>}
+          </div>}
+          {selectedNode.type === 'Mesh' && (inspectorTab === 'all' || inspectorTab === 'motion') && <div className={`inspector-section effect-section ${collapsedSections.has('effects') ? 'collapsed' : ''}`}>
+            <button className="section-header-btn" onClick={() => toggleSection('effects')} title="Collapse or expand GPU Visual Effects">
+              <span className="section-header-left">{collapsedSections.has('effects') ? <ChevronRight size={12} /> : <ChevronDown size={12} />}<span>VISUAL EFFECTS</span></span>
+            </button>
+            {!collapsedSections.has('effects') && (() => {
               const surface = effects.find((item): item is SurfaceEffect => item.targetId === selected && isSurfaceEffect(item))
               const particles = effects.find((item): item is Extract<SceneEffect, { kind: 'particles' }> => item.targetId === selected && item.kind === 'particles')
               const timing = (effect: SceneEffect) => <div className="effect-input-row"><label>Start (s)<input aria-label={`${effect.kind ?? 'dissolve'} start`} type="number" min="0" max={Math.max(0, effect.endTime - 0.05)} step="0.05" value={effect.startTime} onChange={(event) => updateEffect(effect.kind ?? 'dissolve', { startTime: Math.max(0, Math.min(Number(event.target.value), effect.endTime - 0.05)) })} /></label><label>End (s)<input aria-label={`${effect.kind ?? 'dissolve'} end`} type="number" min={effect.startTime + 0.05} max={duration} step="0.05" value={effect.endTime} onChange={(event) => updateEffect(effect.kind ?? 'dissolve', { endTime: Math.max(effect.startTime + 0.05, Math.min(duration, Number(event.target.value))) })} /></label></div>
@@ -1254,10 +1450,17 @@ function App() {
               </>
             })()}
           </div>}
-          <div className="inspector-tip"><Sparkles size={15} /><span>Animate this object by moving the playhead and adding a keyframe.</span></div></> : <div className="inspector-empty">Select an object in the scene hierarchy.</div>}
+          <div className="inspector-tip"><Sparkles size={15} /><span>Hover over any tool for quick help (hold 5s for deep workflow guide). Drag X/Y/Z labels to scrub values.</span></div></> : <div className="inspector-empty">Select an object in the scene hierarchy.</div>}
       </aside>
     </div>
     <footer className="statusbar"><div><span className="status-green" /> Ready <span className="status-divider" /> {nodes.length} objects</div><div className="status-right"><span>WebGPU workspace</span><span className="status-divider" /><a href="https://threejs.org/docs/" target="_blank" rel="noreferrer">Three.js Docs <ExternalIcon /></a></div></footer>
+    {hoverInfo && (
+      <div className="adobe-hover-card" style={{ left: hoverInfo.x, top: hoverInfo.y }} role="tooltip">
+        <span className="hover-badge">{hoverInfo.deep ? 'IN-DEPTH WORKFLOW GUIDE' : 'TOOL INFO'}</span>
+        <h4>{hoverInfo.title}</h4>
+        <p>{hoverInfo.detail}</p>
+      </div>
+    )}
     <input ref={fileInput} type="file" multiple accept=".glb,.gltf,model/gltf-binary,model/gltf+json,image/*" hidden onChange={(event) => { const resources = Array.from(event.target.files ?? []); const model = resources.find((file) => /\.(glb|gltf)$/i.test(file.name)); void loadFile(model, resources, false); event.currentTarget.value = '' }} />
     <input ref={appendFileInput} type="file" multiple accept=".glb,.gltf,model/gltf-binary,model/gltf+json,image/*" hidden onChange={(event) => { const resources = Array.from(event.target.files ?? []); const model = resources.find((file) => /\.(glb|gltf)$/i.test(file.name)); void loadFile(model, resources, true); event.currentTarget.value = '' }} />
     <input ref={folderInput} type="file" multiple hidden onChange={(event) => { const resources = Array.from(event.target.files ?? []); const model = resources.find((resource) => /\.(glb|gltf)$/i.test(resource.name)); void loadFile(model, resources); event.currentTarget.value = '' }} />

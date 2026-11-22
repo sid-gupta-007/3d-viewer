@@ -43,7 +43,7 @@ export type ViewportApi = {
   setVolumeBoxMode?: (mode: 'translate' | 'scale') => void
   getVolumeSelection?: () => { meshIds: string[]; triangleCount: number; primaryMeshId: string | null }
   extractBoxSelection?: () => { extractedIds: string[]; modifiedSourceIds: string[]; extractedCount: number } | null
-  captureSceneSnapshot?: () => { nodes: SceneNode[]; transforms: Record<string, ObjectTransform>; visibility: Record<string, boolean>; pivots: Record<string, PivotPoint>; geometrySnapshot: Record<string, THREE.BufferGeometry> } | null
+  captureSceneSnapshot?: (includeGeometry?: boolean) => { nodes: SceneNode[]; transforms: Record<string, ObjectTransform>; visibility: Record<string, boolean>; pivots: Record<string, PivotPoint>; geometrySnapshot: Record<string, THREE.BufferGeometry> } | null
   restoreSceneSnapshot?: (snapshot: { nodes: SceneNode[]; transforms: Record<string, ObjectTransform>; visibility: Record<string, boolean>; pivots: Record<string, PivotPoint>; geometrySnapshot?: Record<string, unknown> }) => void
   addSceneCamera?: (name?: string) => SceneNode | null
   setActivePovCamera?: (id: string | null) => void
@@ -373,7 +373,10 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
         if (!bounds.isEmpty()) {
           const size = bounds.getSize(new THREE.Vector3())
           const extent = Math.max(size.x, size.y, size.z)
-          if (extent > 0) root.scale.multiplyScalar((append ? 1.5 : 2.2) / extent)
+          const aspectFlatness = extent / Math.max(0.0001, Math.min(size.x, size.y, size.z))
+          const isLargeWorldOrTerrain = !append && (nodes.length > 150 || aspectFlatness > 6)
+          const targetExtent = append ? 1.5 : (isLargeWorldOrTerrain ? 16 : 2.8)
+          if (extent > 0) root.scale.multiplyScalar(targetExtent / extent)
           root.updateMatrixWorld(true)
           const normalizedBounds = new THREE.Box3().setFromObject(root)
           const center = normalizedBounds.getCenter(new THREE.Vector3())
@@ -390,9 +393,11 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
             const target = framedBounds.getCenter(new THREE.Vector3())
             current.controls.target.copy(target)
             const radius = Math.max(framedSize.length() * 0.5, 0.5)
-            const distance = radius / Math.sin(THREE.MathUtils.degToRad(current.camera.fov * 0.5)) * 1.2
+            const distance = radius / Math.sin(THREE.MathUtils.degToRad(current.camera.fov * 0.5)) * (isLargeWorldOrTerrain ? 0.55 : 1.15)
             const direction = current.camera.position.clone().sub(current.controls.target).normalize()
             current.camera.position.copy(target).addScaledVector(direction, distance)
+            current.controls.minDistance = 0.05
+            current.controls.maxDistance = Math.max(120, radius * 8)
             current.controls.update()
           }
         }
@@ -787,16 +792,17 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
 
       return { extractedIds, modifiedSourceIds, extractedCount }
     },
-    captureSceneSnapshot() {
+    captureSceneSnapshot(includeGeometry = false) {
       const current = runtime.current
       if (!current) return null
       const transforms: Record<string, ObjectTransform> = {}
       const visibility: Record<string, boolean> = {}
       const geometrySnapshot: Record<string, THREE.BufferGeometry> = {}
+      const shouldCloneGeo = includeGeometry || current.objects.size <= 150
       for (const [id, obj] of current.objects) {
         transforms[id] = readTransform(obj)
         visibility[id] = obj.visible
-        if ((obj as THREE.Mesh).isMesh && (obj as THREE.Mesh).geometry) {
+        if (shouldCloneGeo && (obj as THREE.Mesh).isMesh && (obj as THREE.Mesh).geometry) {
           geometrySnapshot[id] = (obj as THREE.Mesh).geometry.clone()
         }
       }
@@ -1710,8 +1716,8 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
         controls.target.set(0, 1.05, 0)
         controls.enableDamping = true
         controls.dampingFactor = 0.06
-        controls.minDistance = 2.8
-        controls.maxDistance = 18
+        controls.minDistance = 0.05
+        controls.maxDistance = 200
         controls.maxPolarAngle = Math.PI * 0.49
         resizeObserver = new ResizeObserver(([entry]) => {
           if (!entry || !renderer) return
@@ -1824,17 +1830,30 @@ const SceneViewport = forwardRef<ViewportApi, Props>(function SceneViewport({ se
         }
         const initialSelection = objects.get(selectedId)
         if (initialSelection) onTransformChange(readTransform(initialSelection))
+        let lastSelectedRefObject: THREE.Object3D | undefined
+        let lastSelectedTransformSig = ''
         renderer.setAnimationLoop(() => {
           controls.update()
           const selected = runtime.current?.objects.get(selectedIdRef.current)
-          selectionHelper.visible = Boolean(selected)
-          if (selected) selectionHelper.box.setFromObject(selected)
-          for (const [id, helper] of selectionHelpers) {
-            const object = runtime.current?.objects.get(id)
-            helper.visible = Boolean(object)
-            if (object) helper.box.setFromObject(object)
+          const isHugeNode = selected && (selected.userData.forgeImported || selected.children.length > 40)
+          selectionHelper.visible = Boolean(selected && !isHugeNode)
+          if (selected && !isHugeNode) {
+            const sig = `${selected.position.x.toFixed(3)},${selected.position.y.toFixed(3)},${selected.position.z.toFixed(3)},${selected.rotation.x.toFixed(3)},${selected.rotation.y.toFixed(3)},${selected.rotation.z.toFixed(3)},${selected.scale.x.toFixed(3)}`
+            if (selected !== lastSelectedRefObject || sig !== lastSelectedTransformSig || runtime.current?.transform.dragging) {
+              lastSelectedRefObject = selected
+              lastSelectedTransformSig = sig
+              selectionHelper.box.setFromObject(selected)
+            }
           }
-          if (runtime.current && selectedIdsRef.current.length > 1 && !runtime.current.transform.dragging) {
+          if (selectedIdsRef.current.length <= 25) {
+            for (const [id, helper] of selectionHelpers) {
+              const object = runtime.current?.objects.get(id)
+              const skipHuge = object && (object.userData.forgeImported || object.children.length > 40)
+              helper.visible = Boolean(object && !skipHuge)
+              if (object && !skipHuge && runtime.current?.transform.dragging) helper.box.setFromObject(object)
+            }
+          }
+          if (runtime.current && selectedIdsRef.current.length > 1 && selectedIdsRef.current.length <= 40 && !runtime.current.transform.dragging) {
             const selectionBounds = new THREE.Box3()
             for (const id of selectedIdsRef.current) {
               const object = runtime.current.objects.get(id)
